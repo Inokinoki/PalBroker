@@ -219,6 +219,13 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 	// 尝试解析 JSON（如果 CLI 支持）
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
+		// 处理 null、数组、数字等非对象类型
+		if msg == nil {
+			return map[string]interface{}{
+				"type":    "chunk",
+				"content": line,
+			}, nil
+		}
 		if _, ok := msg["type"]; !ok {
 			msg["type"] = "chunk"
 		}
