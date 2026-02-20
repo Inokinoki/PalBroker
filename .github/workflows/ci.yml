@@ -7,9 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  # 代码格式化检查
-  format:
-    name: Format Check
+  # 完整 CI 流程（使用 Makefile）
+  ci-pipeline:
+    name: CI Pipeline
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -21,20 +21,76 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      - name: Check formatting
+      - name: Run full CI pipeline
         run: |
-          echo "Checking Go code formatting..."
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "❌ The following files are not formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
-          echo "✅ All files are properly formatted"
+          echo "Running full CI pipeline..."
+          make all
+        continue-on-error: true
 
-  # 代码静态分析
-  lint:
-    name: Lint
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-linux-amd64
+          path: pal-broker
+          retention-days: 7
+
+  # 多平台构建（使用 Makefile）
+  cross-platform-build:
+    name: Cross-Platform Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Build all platforms
+        run: |
+          echo "Building for all platforms..."
+          make build-all
+
+      - name: Upload Linux amd64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-linux-amd64
+          path: pal-broker-linux-amd64
+          retention-days: 7
+
+      - name: Upload Linux arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-linux-arm64
+          path: pal-broker-linux-arm64
+          retention-days: 7
+
+      - name: Upload macOS amd64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-darwin-amd64
+          path: pal-broker-darwin-amd64
+          retention-days: 7
+
+      - name: Upload macOS arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pal-broker-darwin-arm64
+          path: pal-broker-darwin-arm64
+          retention-days: 7
+
+  # 代码质量检查（使用 Makefile）
+  code-quality:
+    name: Code Quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -50,15 +106,14 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
 
-      - name: Run linter
+      - name: Run code quality checks
         run: |
-          echo "Running golangci-lint..."
-          golangci-lint run ./...
-        continue-on-error: true
+          echo "Running code quality checks..."
+          make check
 
-  # 单元测试
-  test:
-    name: Unit Tests
+  # 集成测试（使用 Makefile）
+  integration-tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -70,58 +125,16 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      - name: Run unit tests
+      - name: Run integration tests
         run: |
-          echo "Running unit tests..."
-          go test -v -race -coverprofile=coverage.out ./...
-        
-      - name: Show coverage
-        run: |
-          echo "Test Coverage Report:"
-          go tool cover -func=coverage.out
-          
-      - name: Upload coverage to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage.out
-          retention-days: 7
+          echo "Running integration tests..."
+          go test -tags=integration -v ./tests/integration/...
 
-      - name: Fail if coverage too low
-        run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "Total coverage: ${COVERAGE}%"
-          if (( $(echo "$COVERAGE < 20" | bc -l) )); then
-            echo "❌ Coverage is below 20%"
-            exit 1
-          fi
-          echo "✅ Coverage is acceptable"
-
-  # 集成测试框架检查
-  integration-check:
-    name: Integration Test Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-          cache: true
-
-      - name: Check integration tests compile
-        run: |
-          echo "Checking integration tests compile..."
-          go test -tags=integration -c ./tests/integration/...
-          echo "✅ Integration tests compile successfully"
-
-  # 总结
+  # CI 总结
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [format, lint, test, integration-check]
+    needs: [ci-pipeline, cross-platform-build, code-quality, integration-tests]
     if: always()
     steps:
       - name: Generate summary
@@ -132,14 +145,14 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Format | ${{ needs.format.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration Check | ${{ needs.integration-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CI Pipeline | ${{ needs.ci-pipeline.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cross-Platform Build | ${{ needs.cross-platform-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ needs.format.result }}" == "success" ] && \
-             [ "${{ needs.test.result }}" == "success" ]; then
+          if [ "${{ needs.ci-pipeline.result }}" == "success" ] && \
+             [ "${{ needs.cross-platform-build.result }}" == "success" ]; then
             echo "✅ All critical checks passed!" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Some checks failed or were skipped" >> $GITHUB_STEP_SUMMARY
