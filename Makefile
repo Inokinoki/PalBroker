@@ -1,10 +1,11 @@
 # pal-broker Makefile
 # Common operations for development and deployment
 
-.PHONY: help build test clean install run fmt lint vet race coverage deps version
+.PHONY: help build build-ws-test test clean install run fmt lint vet race coverage deps version
 
 # Variables
 BINARY_NAME=pal-broker
+WS_TEST_NAME=ws-test
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -21,6 +22,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build       Build the binary (default)"
+	@echo "  build-ws-test  Build WebSocket test CLI"
 	@echo "  test        Run tests"
 	@echo "  clean       Clean build artifacts"
 	@echo "  install     Install binary to /usr/local/bin"
@@ -46,6 +48,14 @@ build:
 	@echo ""
 	@echo "✅ Build complete: ./${BINARY_NAME}"
 	@ls -lh ${BINARY_NAME}
+
+# Build WebSocket test CLI
+build-ws-test:
+	@echo "Building ${WS_TEST_NAME}..."
+	CGO_ENABLED=0 go build -o ${WS_TEST_NAME} ./cmd/ws-test
+	@echo ""
+	@echo "✅ Build complete: ./${WS_TEST_NAME}"
+	@ls -lh ${WS_TEST_NAME}
 
 # Build for specific platform
 build-linux:
@@ -104,6 +114,7 @@ clean:
 	@echo "Cleaning build artifacts..."
 	rm -f ${BINARY_NAME}
 	rm -f ${BINARY_NAME}-*
+	rm -f ${WS_TEST_NAME}
 	rm -f coverage.out
 	rm -rf dist/
 	@echo "✅ Clean complete"
@@ -233,3 +244,12 @@ tavern-help:
 	@echo "4. View logs:"
 	@echo "   ssh user@server 'tail -f /tmp/pal-broker/q1/output.jsonl'"
 	@echo ""
+	@echo "5. Test WebSocket connection:"
+	@echo "   make build-ws-test"
+	@echo "   ./ws-test -url ws://localhost:8765/ws -quest-id q1 -i"
+	@echo ""
+
+# Build and run WebSocket test
+ws-test: build-ws-test
+	@echo "Running WebSocket test..."
+	./${WS_TEST_NAME} ${ARGS}
