@@ -26,7 +26,7 @@ var (
 func main() {
 	flag.Parse()
 
-	// 支持 --task 和 --quest-id 两种参数
+	// Support both --task and --quest-id flags
 	id := *taskID
 	if id == "" {
 		id = *questID
@@ -36,7 +36,7 @@ func main() {
 		log.Fatal("task/quest ID required (use --task or --quest-id)")
 	}
 
-	// 创建会话目录
+	// Create session directory
 	dir := filepath.Join(*sessionDir, id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Fatalf("Failed to create session directory %s: %v", dir, err)
@@ -44,22 +44,22 @@ func main() {
 
 	log.Printf("Starting pal-broker for quest %s (provider: %s)", id, *provider)
 
-	// 初始化状态管理器
+	// Initialize state manager
 	stateMgr := state.NewManager(*sessionDir)
 	if err := stateMgr.CreateTask(id, *provider); err != nil {
 		log.Fatalf("Failed to create task state: %v", err)
 	}
 
-	// 保存 PID
+	// Save pal-broker PID
 	pidFile := filepath.Join(dir, "bridge.pid")
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
 		log.Printf("Warning: failed to write PID file: %v", err)
 	}
 
-	// 初始化 CLI 适配器
+	// Initialize CLI adapter
 	cliAdapter := adapter.NewAdapter(*provider, *workDir)
 
-	// 启动 CLI
+	// Start AI CLI
 	cli, err := cliAdapter.Start()
 	if err != nil {
 		log.Fatalf("Failed to start AI CLI: %v", err)
@@ -67,13 +67,13 @@ func main() {
 
 	log.Printf("AI CLI started (PID: %d)", cli.Pid)
 
-	// 保存 CLI PID
+	// Save AI CLI PID
 	cliPidFile := filepath.Join(dir, "cli.pid")
 	if err := os.WriteFile(cliPidFile, []byte(fmt.Sprintf("%d", cli.Pid)), 0644); err != nil {
 		log.Printf("Warning: failed to write CLI PID file: %v", err)
 	}
 
-	// 启动 WebSocket 服务器
+	// Start WebSocket server
 	wsServer := server.NewWebSocketServer(stateMgr, id, cli)
 	port, err := wsServer.Start(*portFlag)
 	if err != nil {
@@ -82,29 +82,29 @@ func main() {
 
 	log.Printf("WebSocket server listening on port %d", port)
 
-	// 保存 WebSocket 端口到文件
+	// Save WebSocket port to file
 	portFile := filepath.Join(dir, "ws_port")
 	if err := os.WriteFile(portFile, []byte(fmt.Sprintf("%d", port)), 0644); err != nil {
 		log.Fatalf("Failed to write port file %s: %v", portFile, err)
 	}
 	log.Printf("Port file written to: %s", portFile)
 
-	// 转发 CLI 输出到状态管理器
+	// Forward CLI output to state manager
 	go wsServer.ForwardOutput(cli.Stdout, cli.Stderr)
 
-	// 优雅关闭
+	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigChan
 	log.Printf("Received signal %v, shutting down...", sig)
 
-	// 停止 CLI
+	// Stop AI CLI
 	if err := cli.Stop(); err != nil {
 		log.Printf("Warning: failed to stop AI CLI: %v", err)
 	}
 
-	// 更新状态
+	// Update task status
 	stateMgr.UpdateStatus(id, "stopped")
 
 	log.Println("Cleanup completed, exiting")

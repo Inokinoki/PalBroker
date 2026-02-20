@@ -10,7 +10,7 @@ import (
 	"pal-broker/internal/state"
 )
 
-// TestWebSocketClientMethods 测试 WebSocketClient 方法
+// TestWebSocketClientMethods Test WebSocketClient methods
 func TestWebSocketClientMethods(t *testing.T) {
 	client := &WebSocketClient{
 		DeviceID:    "test_device",
@@ -18,18 +18,18 @@ func TestWebSocketClientMethods(t *testing.T) {
 		LastActive:  time.Now(),
 	}
 
-	// 测试 IsClosed
+	// Test IsClosed
 	if client.IsClosed() {
 		t.Error("Expected client to not be closed initially")
 	}
 
-	// 测试 SetClosed
+	// Test SetClosed
 	client.SetClosed()
 	if !client.IsClosed() {
 		t.Error("Expected client to be closed after SetClosed")
 	}
 
-	// 测试 UpdateActivity
+	// Test UpdateActivity
 	client2 := &WebSocketClient{
 		DeviceID:   "test_device_2",
 		LastActive: time.Now().Add(-time.Hour),
@@ -39,7 +39,7 @@ func TestWebSocketClientMethods(t *testing.T) {
 		t.Error("Expected LastActive to be updated")
 	}
 
-	// 测试 IncrementReconnect
+	// Test IncrementReconnect
 	client3 := &WebSocketClient{}
 	client3.IncrementReconnect()
 	client3.IncrementReconnect()
@@ -48,7 +48,7 @@ func TestWebSocketClientMethods(t *testing.T) {
 	}
 }
 
-// TestWebSocketServerCreation 测试服务器创建
+// TestWebSocketServerCreation Test WebSocketServer creation
 func TestWebSocketServerCreation(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-ws-creation")
 	server := NewWebSocketServer(stateMgr, "test_task", nil)
@@ -74,12 +74,12 @@ func TestWebSocketServerCreation(t *testing.T) {
 	}
 }
 
-// TestServerStartAndStop 测试服务器启动和停止
+// TestServerStartAndStop Test server start and stop
 func TestServerStartAndStop(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-ws-startstop")
 	server := NewWebSocketServer(stateMgr, "test_task", nil)
 
-	// 启动服务器
+	// StartServer
 	port, err := server.Start(":0")
 	if err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -91,10 +91,10 @@ func TestServerStartAndStop(t *testing.T) {
 
 	t.Logf("Server started on port %d", port)
 
-	// 等待一下
+	// Wait a bit
 	time.Sleep(100 * time.Millisecond)
 
-	// 停止服务器
+	// Stop server
 	err = server.Stop()
 	if err != nil {
 		t.Errorf("Failed to stop server: %v", err)
@@ -103,23 +103,23 @@ func TestServerStartAndStop(t *testing.T) {
 	t.Log("Server stopped successfully")
 }
 
-// TestBroadcastChannel 测试广播通道
+// TestBroadcastChannel Test broadcast channel
 func TestBroadcastChannel(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-broadcast-channel")
 	server := NewWebSocketServer(stateMgr, "test", nil)
 
-	// 启动广播处理器
+	// StartBroadcastHandleer
 	server.wg.Add(1)
 	go server.broadcastHandler()
 
-	// 发送事件到广播通道
+	// Send event to broadcast channel
 	event := state.Event{
 		Type:      "chunk",
 		Timestamp: time.Now().UnixMilli(),
 		Data:      map[string]string{"content": "test"},
 	}
 
-	// 不应该阻塞
+	// Should not block
 	select {
 	case server.broadcastCh <- event:
 		t.Log("Event sent to broadcast channel")
@@ -127,21 +127,21 @@ func TestBroadcastChannel(t *testing.T) {
 		t.Error("Broadcast channel is blocked")
 	}
 
-	// 清理
+	// Cleanup
 	close(server.broadcastCh)
 	server.wg.Wait()
 }
 
-// TestErrorHandler 测试错误处理
+// TestErrorHandler Test error handler
 func TestErrorHandler(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-error-handler")
 	server := NewWebSocketServer(stateMgr, "test", nil)
 
-	// 启动错误处理器
+	// StartErrorHandleer
 	server.wg.Add(1)
 	go server.errorHandler()
 
-	// 发送错误
+	// Send error
 	testErr := "test error"
 	select {
 	case server.errorCh <- &testError{testErr}:
@@ -150,12 +150,12 @@ func TestErrorHandler(t *testing.T) {
 		t.Error("Error channel is blocked")
 	}
 
-	// 清理
+	// Cleanup
 	close(server.errorCh)
 	server.wg.Wait()
 }
 
-// testError 实现 error 接口
+// testError Implement error interface
 type testError struct {
 	msg string
 }
@@ -164,7 +164,7 @@ func (e *testError) Error() string {
 	return e.msg
 }
 
-// TestAddRemoveClient 测试添加和移除客户端
+// TestAddRemoveClient Test add and remove client
 func TestAddRemoveClient(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-client-mgmt")
 	server := NewWebSocketServer(stateMgr, "test", nil)
@@ -175,14 +175,14 @@ func TestAddRemoveClient(t *testing.T) {
 		LastActive:  time.Now(),
 	}
 
-	// 添加客户端
+	// Add client
 	server.addClient("test_device", client)
 
 	if server.GetClientCount() != 1 {
 		t.Errorf("Expected 1 client, got %d", server.GetClientCount())
 	}
 
-	// 获取客户端信息
+	// Get client info
 	info, err := server.GetClientInfo("test_device")
 	if err != nil {
 		t.Fatalf("Failed to get client info: %v", err)
@@ -192,7 +192,7 @@ func TestAddRemoveClient(t *testing.T) {
 		t.Errorf("Expected device_id='test_device', got %s", info.DeviceID)
 	}
 
-	// 移除客户端
+	// Remove client
 	server.removeClient("test_device")
 
 	if server.GetClientCount() != 0 {
@@ -200,7 +200,7 @@ func TestAddRemoveClient(t *testing.T) {
 	}
 }
 
-// TestConcurrentClientAccess 测试并发客户端访问
+// TestConcurrentClientAccess Test concurrent client access
 func TestConcurrentClientAccess(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-concurrent-access")
 	server := NewWebSocketServer(stateMgr, "test", nil)
@@ -208,7 +208,7 @@ func TestConcurrentClientAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 10
 
-	// 并发添加客户端
+	// Concurrent add clients
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -228,7 +228,7 @@ func TestConcurrentClientAccess(t *testing.T) {
 		t.Errorf("Expected %d clients, got %d", numGoroutines, server.GetClientCount())
 	}
 
-	// 并发移除客户端
+	// Concurrent remove clients
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -244,9 +244,9 @@ func TestConcurrentClientAccess(t *testing.T) {
 	}
 }
 
-// TestBroadcastToClients 测试广播到客户端
+// TestBroadcastToClients Test broadcast to clients
 func TestBroadcastToClients(t *testing.T) {
-	// 这个测试需要真实的 WebSocket 连接，这里只测试逻辑
+	// This test needs real WebSocket, testing logic only
 	stateMgr := state.NewManager("/tmp/test-broadcast")
 	server := NewWebSocketServer(stateMgr, "test", nil)
 
@@ -256,12 +256,12 @@ func TestBroadcastToClients(t *testing.T) {
 		Data:      map[string]string{"content": "test"},
 	}
 
-	// 没有客户端时不应该 panic
+	// Should not panic with no clients
 	server.broadcastToClients(event)
 	t.Log("Broadcast to empty clients succeeded")
 }
 
-// TestSplitLines 测试行分割
+// TestSplitLines Test split lines
 func TestSplitLines(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -282,7 +282,7 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-// TestClientMessageUnmarshal 测试客户端消息解析
+// TestClientMessageUnmarshal Test client message unmarshal
 func TestClientMessageUnmarshal(t *testing.T) {
 	jsonData := `{"command": "send_input", "data": {"content": "Hello"}}`
 
@@ -301,7 +301,7 @@ func TestClientMessageUnmarshal(t *testing.T) {
 	}
 }
 
-// TestServerEvent 测试服务器事件
+// TestServerEvent Test server event
 func TestServerEvent(t *testing.T) {
 	event := ServerEvent{
 		Event: state.Event{
@@ -316,7 +316,7 @@ func TestServerEvent(t *testing.T) {
 	}
 }
 
-// TestRandomString 测试随机字符串生成
+// TestRandomString Test random string generation
 func TestRandomString(t *testing.T) {
 	str := randomString(10)
 
@@ -324,7 +324,7 @@ func TestRandomString(t *testing.T) {
 		t.Errorf("Expected length 10, got %d", len(str))
 	}
 
-	// 验证只包含字母数字
+	// Verify only alphanumeric
 	for _, c := range str {
 		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
 			t.Errorf("Invalid character in random string: %c", c)
@@ -332,7 +332,7 @@ func TestRandomString(t *testing.T) {
 	}
 }
 
-// TestGenerateDeviceID 测试设备 ID 生成
+// TestGenerateDeviceID Test device ID generation
 func TestGenerateDeviceID(t *testing.T) {
 	id1 := generateDeviceID()
 	id2 := generateDeviceID()
@@ -345,40 +345,40 @@ func TestGenerateDeviceID(t *testing.T) {
 		t.Errorf("Expected device ID to start with 'device_', got %s", id1)
 	}
 
-	// 两个 ID 应该不同（有一定概率）
+	// Two IDs should be different (probabilistic)
 	t.Logf("Generated IDs: %s, %s", id1, id2)
 }
 
-// TestHealthEndpoint 测试健康检查端点
+// TestHealthEndpoint Test health endpoint
 func TestHealthEndpoint(t *testing.T) {
 	t.Skip("Skipping: HTTP handler registration conflict in tests")
 
 	stateMgr := state.NewManager("/tmp/test-health")
 	server := NewWebSocketServer(stateMgr, "test_task", nil)
 
-	// 启动服务器
+	// StartServer
 	port, err := server.Start(":0")
 	if err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	// 等待服务器启动
+	// Wait for server start
 	time.Sleep(100 * time.Millisecond)
 
-	// 可以通过 HTTP 测试健康端点
-	// 这里只测试逻辑
+	// Can test health endpoint via HTTP
+	// HereOnlyTestLogic
 	t.Logf("Health endpoint available at http://localhost:%d/health", port)
 }
 
-// TestClientReconnect 测试客户端重连逻辑
+// TestClientReconnect Test client reconnect logic
 func TestClientReconnect(t *testing.T) {
 	client := &WebSocketClient{
 		DeviceID:       "test_device",
 		ReconnectCount: 0,
 	}
 
-	// 模拟多次重连
+	// Simulate multiple reconnects
 	for i := 0; i < MaxReconnectAttempts; i++ {
 		client.IncrementReconnect()
 		t.Logf("Reconnect attempt %d/%d", client.GetReconnectCount(), MaxReconnectAttempts)
@@ -389,9 +389,9 @@ func TestClientReconnect(t *testing.T) {
 	}
 }
 
-// TestReconnectDelay 测试重连延迟
+// TestReconnectDelay Test reconnect delay
 func TestReconnectDelay(t *testing.T) {
-	// 测试指数退避
+	// TestExponentialBackoff
 	delays := []time.Duration{}
 	for i := 0; i < MaxReconnectAttempts; i++ {
 		delay := time.Duration(1<<uint(i)) * ReconnectDelayBase
@@ -402,20 +402,20 @@ func TestReconnectDelay(t *testing.T) {
 		t.Logf("Attempt %d: delay=%v", i+1, delay)
 	}
 
-	// 验证延迟递增
+	// Verify increasing delays
 	for i := 1; i < len(delays)-1; i++ {
 		if delays[i] <= delays[i-1] {
 			t.Errorf("Expected increasing delays: %v <= %v", delays[i], delays[i-1])
 		}
 	}
 
-	// 验证不超过最大值
+	// Verify does not exceed max
 	if delays[len(delays)-1] > ReconnectDelayMax {
 		t.Errorf("Max delay exceeded: %v > %v", delays[len(delays)-1], ReconnectDelayMax)
 	}
 }
 
-// TestErrorDefinitions 测试错误定义
+// TestErrorDefinitions Test error definitions
 func TestErrorDefinitions(t *testing.T) {
 	errors := []error{
 		ErrClientNotFound,
@@ -433,12 +433,12 @@ func TestErrorDefinitions(t *testing.T) {
 	}
 }
 
-// TestServerConfig 测试服务器配置
+// TestServerConfig Test server config
 func TestServerConfig(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-config")
 	server := NewWebSocketServer(stateMgr, "test", nil)
 
-	// 验证默认配置
+	// Verify default config
 	if !server.config.EnableCompression {
 		t.Error("Expected EnableCompression to be true")
 	}
@@ -452,12 +452,12 @@ func TestServerConfig(t *testing.T) {
 	}
 }
 
-// TestConcurrentBroadcast 测试并发广播
+// TestConcurrentBroadcast Test concurrent broadcast
 func TestConcurrentBroadcast(t *testing.T) {
 	stateMgr := state.NewManager("/tmp/test-concurrent-broadcast")
 	server := NewWebSocketServer(stateMgr, "test", nil)
 
-	// 启动广播处理器
+	// StartBroadcastHandleer
 	server.wg.Add(1)
 	go server.broadcastHandler()
 
@@ -470,7 +470,7 @@ func TestConcurrentBroadcast(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 10
 
-	// 并发发送广播
+	// Concurrent send broadcasts
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func() {
@@ -481,14 +481,14 @@ func TestConcurrentBroadcast(t *testing.T) {
 
 	wg.Wait()
 
-	// 清理
+	// Cleanup
 	close(server.broadcastCh)
 	server.wg.Wait()
 }
 
-// TestWebSocketConstants 测试 WebSocket 常量
+// TestWebSocketConstants Test WebSocket constants
 func TestWebSocketConstants(t *testing.T) {
-	// 验证常量定义合理
+	// Verify constants are reasonable
 	if MaxReconnectAttempts <= 0 {
 		t.Error("MaxReconnectAttempts should be positive")
 	}

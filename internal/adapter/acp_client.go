@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// ACPMessage ACP 协议消息
+// ACPMessage ACP ProtocolMessage
 type ACPMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      *int64          `json:"id,omitempty"`
@@ -20,27 +20,27 @@ type ACPMessage struct {
 	Error   *ACPError       `json:"error,omitempty"`
 }
 
-// ACPError ACP 错误
+// ACPError ACP Error
 type ACPError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    string `json:"data,omitempty"`
 }
 
-// ACPSessionUpdate ACP 会话更新通知
+// ACPSessionUpdate - ACP session Update notification
 type ACPSessionUpdate struct {
 	SessionID     string     `json:"sessionId"`
 	SessionUpdate string     `json:"sessionUpdate"`
 	Content       ACPContent `json:"content"`
 }
 
-// ACPContent ACP 内容
+// ACPContent ACP Content
 type ACPContent struct {
 	Type string `json:"type"` // text, diff, command, etc.
 	Text string `json:"text,omitempty"`
 }
 
-// ACPClient ACP 客户端
+// ACPClient ACP client
 type ACPClient struct {
 	provider  string
 	cmd       *exec.Cmd
@@ -51,7 +51,7 @@ type ACPClient struct {
 	mu        sync.Mutex
 }
 
-// NewACPClient 创建 ACP 客户端
+// NewACPClient Create ACP client
 func NewACPClient(provider string) (*ACPClient, error) {
 	var cmd *exec.Cmd
 
@@ -87,9 +87,9 @@ func NewACPClient(provider string) (*ACPClient, error) {
 	}, nil
 }
 
-// Start 启动 ACP 客户端（初始化）
+// Start Start ACP client（Initialization）
 func (c *ACPClient) Start() error {
-	// 发送 initialize 请求
+	// Send initialize request
 	err := c.sendRequest("initialize", map[string]interface{}{
 		"protocolVersion":    "2025-06-18",
 		"clientCapabilities": map[string]interface{}{},
@@ -102,7 +102,7 @@ func (c *ACPClient) Start() error {
 	return nil
 }
 
-// NewSession 创建新会话
+// NewSession - Create new session
 func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, error) {
 	var result struct {
 		SessionID string `json:"sessionId"`
@@ -122,7 +122,7 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 	return result.SessionID, nil
 }
 
-// Prompt 发送提示
+// Prompt Sendprompt
 func (c *ACPClient) Prompt(prompt string) error {
 	if c.sessionID == "" {
 		return fmt.Errorf("no active session")
@@ -138,7 +138,7 @@ func (c *ACPClient) Prompt(prompt string) error {
 	return c.sendRequest("session/prompt", params, nil)
 }
 
-// Listen 监听 ACP 消息
+// Listen Listen ACP Message
 func (c *ACPClient) Listen(handler func(*ACPMessage)) error {
 	scanner := bufio.NewScanner(c.stdout)
 	for scanner.Scan() {
@@ -149,7 +149,7 @@ func (c *ACPClient) Listen(handler func(*ACPMessage)) error {
 
 		var msg ACPMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			// 解析失败，跳过
+			// ParseFail，Skip
 			continue
 		}
 
@@ -159,7 +159,7 @@ func (c *ACPClient) Listen(handler func(*ACPMessage)) error {
 	return scanner.Err()
 }
 
-// Stop 停止 ACP 客户端
+// Stop Stop ACP client
 func (c *ACPClient) Stop() error {
 	if c.cmd != nil && c.cmd.Process != nil {
 		return c.cmd.Process.Kill()
@@ -167,7 +167,7 @@ func (c *ACPClient) Stop() error {
 	return nil
 }
 
-// Pid 获取进程 ID
+// Pid GetProcess ID
 func (c *ACPClient) Pid() int {
 	if c.cmd != nil {
 		return c.cmd.Process.Pid
@@ -199,20 +199,20 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 		return err
 	}
 
-	// 如果需要结果，等待响应（简化实现）
-	// 实际实现需要异步处理和请求 ID 匹配
+	// IfNeedResult，Wait for response（simplifiedImplement）
+	// ActualImplementNeedasyncHandleAndrequest ID Match
 	if result != nil {
-		// 简单延迟等待（实际应该用 channel 和 select）
+		// SimpleDelayWait（ActualShoulduse channel And select）
 		time.Sleep(100 * time.Millisecond)
-		// TODO: 实现正确的响应等待机制
+		// TODO: ImplementcorrectResponseWaitmechanism
 	}
 
 	return nil
 }
 
-// ParseMessage 解析 ACP 消息为 Bridge Event
+// ParseMessage Parse ACP Messageto Bridge Event
 func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
-	// 处理通知
+	// HandleNotification
 	if msg.Method == "session/update" {
 		var update ACPSessionUpdate
 		if err := json.Unmarshal(msg.Params, &update); err != nil {
@@ -222,7 +222,7 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 			}
 		}
 
-		// 根据更新类型返回不同格式
+		// According to new type, return not same format
 		switch update.SessionUpdate {
 		case "agent_message_chunk":
 			return map[string]interface{}{
@@ -245,7 +245,7 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 		}
 	}
 
-	// 处理响应
+	// HandleResponse
 	if msg.Result != nil {
 		var result map[string]interface{}
 		if err := json.Unmarshal(msg.Result, &result); err == nil {
@@ -256,7 +256,7 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 		}
 	}
 
-	// 处理错误
+	// Handle error
 	if msg.Error != nil {
 		return map[string]interface{}{
 			"type":    "error",
@@ -265,7 +265,7 @@ func (c *ACPClient) ParseMessage(msg *ACPMessage) map[string]interface{} {
 		}
 	}
 
-	// 未知消息类型
+	// UnknownMessagetype
 	return map[string]interface{}{
 		"type":    "unknown",
 		"message": msg,

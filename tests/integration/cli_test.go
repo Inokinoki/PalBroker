@@ -1,13 +1,13 @@
-// Package integration 提供真实 CLI 的集成测试
-// 这些测试需要真实安装对应的 CLI 工具
+// Package integration ProvideRealistic CLI IntegrationTest
+// TheseTestNeedRealisticinstall corresponding CLI tools
 //
-// 运行测试:
+// RunLineTest:
 //   go test -tags=integration ./tests/integration/...
 //
-// 或者单独测试某个 CLI:
+// Oror test aTestspecific CLI:
 //   go test -tags=integration -run TestClaudeCode ./tests/integration/...
 //
-// 注意：这些测试会真实调用 AI 服务，可能产生费用！
+// Note：TheseTestWillRealisticcall AI services，Mayincur costs！
 
 //go:build integration
 // +build integration
@@ -21,28 +21,28 @@ import (
 	"time"
 )
 
-// skipIfNoCLI 如果 CLI 不存在则跳过测试
+// skipIfNoCLI skipIfNoCLI - Skip test if CLI not installed
 func skipIfNoCLI(t *testing.T, cliName string) {
 	if _, err := exec.LookPath(cliName); err != nil {
 		t.Skipf("Skipping: %s not installed", cliName)
 	}
 }
 
-// TestClaudeCode_Integration 测试真实的 Claude Code CLI
+// TestClaudeCode_Integration Test real Claude Code CLI
 func TestClaudeCode_Integration(t *testing.T) {
 	skipIfNoCLI(t, "claude")
 
-	// 检查是否有 API key
+	// Check if API key exists
 	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("CLAUDE_API_KEY") == "" {
 		t.Skip("Skipping: No Anthropic API key found")
 	}
 
 	t.Log("Testing Claude Code CLI...")
 
-	// 创建一个临时目录
+	// CreateATemporarilyDirectory
 	tmpDir := t.TempDir()
 
-	// 运行一个简单的任务
+	// Run a simple task
 	cmd := exec.Command("claude", "-p", "Say hello in one sentence")
 	cmd.Dir = tmpDir
 	cmd.Env = os.Environ()
@@ -54,36 +54,36 @@ func TestClaudeCode_Integration(t *testing.T) {
 
 	t.Logf("Claude Code output: %s", string(output))
 
-	// 验证输出包含 hello 或类似内容
+	// Verify output contains hello or similar
 	outputStr := string(output)
 	if len(outputStr) == 0 {
 		t.Error("Expected non-empty output from Claude Code")
 	}
 }
 
-// TestCodex_Integration 测试真实的 Codex CLI
+// TestCodex_Integration Test real Codex CLI
 func TestCodex_Integration(t *testing.T) {
 	skipIfNoCLI(t, "codex")
 
-	// Codex 通常需要登录
+	// Codex usually requires login
 	t.Log("Testing Codex CLI...")
 
 	tmpDir := t.TempDir()
 
-	// 运行简单任务
+	// Run simple task
 	cmd := exec.Command("codex", "-p", "Explain what is 2+2")
 	cmd.Dir = tmpDir
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Codex 可能需要登录，跳过而不是失败
+		// Codex may need login, skip instead of fail
 		t.Skipf("Codex not configured: %v", err)
 	}
 
 	t.Logf("Codex output: %s", string(output))
 }
 
-// TestCopilot_Integration 测试真实的 Copilot CLI
+// TestCopilot_Integration Test real Copilot CLI
 func TestCopilot_Integration(t *testing.T) {
 	skipIfNoCLI(t, "copilot")
 
@@ -91,12 +91,12 @@ func TestCopilot_Integration(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	// 运行简单任务
+	// Run simple task
 	cmd := exec.Command("copilot", "-p", "What is Go?")
 	cmd.Dir = tmpDir
 	cmd.Env = os.Environ()
 
-	// 设置超时
+	// Set timeout
 	done := make(chan error, 1)
 	go func() {
 		_, err := cmd.CombinedOutput()
@@ -114,7 +114,7 @@ func TestCopilot_Integration(t *testing.T) {
 	}
 }
 
-// TestPalBroker_Claude 测试 pal-broker 与 Claude 的集成
+// TestPalBroker_Claude Test pal-broker integration with Claude
 func TestPalBroker_Claude(t *testing.T) {
 	skipIfNoCLI(t, "pal-broker")
 	skipIfNoCLI(t, "claude")
@@ -127,7 +127,7 @@ func TestPalBroker_Claude(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	// 启动 pal-broker
+	// Start pal-broker
 	cmd := exec.Command("pal-broker",
 		"--task", "integration_test",
 		"--provider", "claude",
@@ -140,20 +140,20 @@ func TestPalBroker_Claude(t *testing.T) {
 		t.Fatalf("Failed to start pal-broker: %v", err)
 	}
 
-	// 等待 5 秒
+	// Wait 5 seconds
 	time.Sleep(5 * time.Second)
 
-	// 检查进程是否还在运行
+	// Check if process is still running
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		t.Error("pal-broker exited unexpectedly")
 	}
 
-	// 清理
+	// Cleanup
 	cmd.Process.Kill()
 	cmd.Wait()
 }
 
-// TestAllCLIsInstalled 测试所有 CLI 是否已安装
+// TestAllCLIsInstalled Test if all CLIs are installed
 func TestAllCLIsInstalled(t *testing.T) {
 	clis := []string{
 		"claude",

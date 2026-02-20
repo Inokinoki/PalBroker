@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// setupTestManager 创建测试用的管理器
+// setupTestManager setupTestManager - Create test manager
 func setupTestManager(t *testing.T) (*Manager, string, func()) {
-	// 创建临时目录
+	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "pal-broker-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -17,7 +17,7 @@ func setupTestManager(t *testing.T) (*Manager, string, func()) {
 
 	mgr := NewManager(tmpDir)
 
-	// 清理函数
+	// Cleanup function
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
 	}
@@ -25,7 +25,7 @@ func setupTestManager(t *testing.T) (*Manager, string, func()) {
 	return mgr, tmpDir, cleanup
 }
 
-// TestCreateTask 测试创建任务
+// TestCreateTask TestCreateTask - Test task creation
 func TestCreateTask(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -33,13 +33,13 @@ func TestCreateTask(t *testing.T) {
 	taskID := "test_task_001"
 	provider := "claude"
 
-	// 创建任务
+	// Create task
 	err := mgr.CreateTask(taskID, provider)
 	if err != nil {
 		t.Fatalf("Failed to create task: %v", err)
 	}
 
-	// 验证任务状态
+	// Verify task state
 	state, err := mgr.LoadState(taskID)
 	if err != nil {
 		t.Fatalf("Failed to load state: %v", err)
@@ -62,7 +62,7 @@ func TestCreateTask(t *testing.T) {
 	}
 }
 
-// TestUpdateStatus 测试更新状态
+// TestUpdateStatus TestUpdateStatus - Test status update
 func TestUpdateStatus(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -70,13 +70,13 @@ func TestUpdateStatus(t *testing.T) {
 	taskID := "test_task_002"
 	mgr.CreateTask(taskID, "claude")
 
-	// 更新状态
+	// UpdateState
 	err := mgr.UpdateStatus(taskID, "completed")
 	if err != nil {
 		t.Fatalf("Failed to update status: %v", err)
 	}
 
-	// 验证状态
+	// Verify status
 	state, _ := mgr.LoadState(taskID)
 	if state.Status != "completed" {
 		t.Errorf("Expected status completed, got %s", state.Status)
@@ -87,7 +87,7 @@ func TestUpdateStatus(t *testing.T) {
 	}
 }
 
-// TestNextSeq 测试序号递增
+// TestNextSeq TestNextSeq - Test sequence increment
 func TestNextSeq(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -95,7 +95,7 @@ func TestNextSeq(t *testing.T) {
 	taskID := "test_task_003"
 	mgr.CreateTask(taskID, "claude")
 
-	// 测试序号递增
+	// TestSeqIncreasing
 	seq1, _ := mgr.NextSeq(taskID)
 	seq2, _ := mgr.NextSeq(taskID)
 	seq3, _ := mgr.NextSeq(taskID)
@@ -111,7 +111,7 @@ func TestNextSeq(t *testing.T) {
 	}
 }
 
-// TestAddOutput 测试添加输出
+// TestAddOutput TestAddOutput - Test add output
 func TestAddOutput(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -119,7 +119,7 @@ func TestAddOutput(t *testing.T) {
 	taskID := "test_task_004"
 	mgr.CreateTask(taskID, "claude")
 
-	// 添加输出
+	// AddOutput
 	event := Event{
 		Type: "chunk",
 		Data: map[string]string{"content": "Hello, World!"},
@@ -130,20 +130,20 @@ func TestAddOutput(t *testing.T) {
 		t.Fatalf("Failed to add output: %v", err)
 	}
 
-	// 验证输出文件存在
+	// Verify output file exists
 	outputFile := filepath.Join(mgr.sessionDir, taskID, "output.jsonl")
 	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
 		t.Error("Expected output.jsonl to exist")
 	}
 
-	// 验证序号已更新
+	// Verify sequence updated
 	state, _ := mgr.LoadState(taskID)
 	if state.Seq != 1 {
 		t.Errorf("Expected seq=1 after AddOutput, got %d", state.Seq)
 	}
 }
 
-// TestAddDevice 测试添加设备
+// TestAddDevice TestAddDevice - Test add device
 func TestAddDevice(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -151,27 +151,27 @@ func TestAddDevice(t *testing.T) {
 	taskID := "test_task_005"
 	mgr.CreateTask(taskID, "claude")
 
-	// 添加设备
+	// AddDevice
 	deviceID := "device_001"
 	err := mgr.AddDevice(taskID, deviceID)
 	if err != nil {
 		t.Fatalf("Failed to add device: %v", err)
 	}
 
-	// 验证设备已添加
+	// Verify device added
 	devicesFile := filepath.Join(mgr.sessionDir, taskID, "devices.json")
 	if _, err := os.Stat(devicesFile); os.IsNotExist(err) {
 		t.Error("Expected devices.json to exist")
 	}
 
-	// 再次添加同一设备（应该更新而不是重复添加）
+	// Add same device again (should update, not duplicate)
 	err = mgr.AddDevice(taskID, deviceID)
 	if err != nil {
 		t.Fatalf("Failed to update device: %v", err)
 	}
 }
 
-// TestUpdateDeviceSeq 测试更新设备序号
+// TestUpdateDeviceSeq TestUpdateDeviceSeq - Test update device sequence
 func TestUpdateDeviceSeq(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -182,13 +182,13 @@ func TestUpdateDeviceSeq(t *testing.T) {
 	mgr.CreateTask(taskID, "claude")
 	mgr.AddDevice(taskID, deviceID)
 
-	// 更新设备序号
+	// Update device sequence
 	err := mgr.UpdateDeviceSeq(taskID, deviceID, 100)
 	if err != nil {
 		t.Fatalf("Failed to update device seq: %v", err)
 	}
 
-	// 验证序号已更新（通过读取文件）
+	// Verify sequence updated（ViaReadingFile）
 	devices, _ := mgr.loadDevices(taskID)
 	found := false
 	for _, d := range devices {
@@ -208,7 +208,7 @@ func TestUpdateDeviceSeq(t *testing.T) {
 	}
 }
 
-// TestGetIncrementalOutput 测试获取增量输出
+// TestGetIncrementalOutput TestGetIncrementalOutput - Test get incremental output
 func TestGetIncrementalOutput(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -216,7 +216,7 @@ func TestGetIncrementalOutput(t *testing.T) {
 	taskID := "test_task_007"
 	mgr.CreateTask(taskID, "claude")
 
-	// 添加多个输出
+	// AddmultipleOutput
 	for i := 1; i <= 5; i++ {
 		event := Event{
 			Type: "chunk",
@@ -225,50 +225,50 @@ func TestGetIncrementalOutput(t *testing.T) {
 		mgr.AddOutput(taskID, event)
 	}
 
-	// 获取从 seq=2 开始的增量输出
+	// Getfrom seq=2 startIncrementalOutput
 	events, err := mgr.GetIncrementalOutput(taskID, 2)
 	if err != nil {
 		t.Fatalf("Failed to get incremental output: %v", err)
 	}
 
-	// 应该返回 seq=3,4,5 的输出（共 3 个）
+	// Should return seq=3,4,5 output (3 total)
 	if len(events) != 3 {
 		t.Errorf("Expected 3 events, got %d", len(events))
 	}
 
-	// 验证第一个事件的 seq
+	// Verify first event seq
 	if len(events) > 0 && events[0].Seq != 3 {
 		t.Errorf("Expected first event seq=3, got %d", events[0].Seq)
 	}
 }
 
-// TestListTasks 测试列出任务
+// TestListTasks TestListTasks - Test list tasks
 func TestListTasks(t *testing.T) {
 	mgr, tmpDir, cleanup := setupTestManager(t)
 	defer cleanup()
 
-	// 创建多个任务（使用 task_ 前缀，因为 ListTasks 过滤这个前缀）
+	// CreatemultipleTask（Use task_ prefix，sinceto ListTasks FilterThisprefix）
 	taskIDs := []string{"task_001", "task_002", "task_003"}
 	for _, id := range taskIDs {
 		mgr.CreateTask(id, "claude")
 	}
 
-	// 创建一个非任务目录（不应该被列出）
+	// Create non-task directory (should not be listed)
 	os.MkdirAll(filepath.Join(tmpDir, "not_a_task"), 0755)
 
-	// 列出任务
+	// ListTask
 	tasks, err := mgr.ListTasks()
 	if err != nil {
 		t.Fatalf("Failed to list tasks: %v", err)
 	}
 
-	// 验证任务数量
+	// Verify task count
 	if len(tasks) != 3 {
 		t.Errorf("Expected 3 tasks, got %d: %v", len(tasks), tasks)
 	}
 }
 
-// TestLoadNonExistentTask 测试加载不存在的任务
+// TestLoadNonExistentTask TestLoadNonExistentTask - Test load non-existent task
 func TestLoadNonExistentTask(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -279,7 +279,7 @@ func TestLoadNonExistentTask(t *testing.T) {
 	}
 }
 
-// TestConcurrentAccess 测试并发访问
+// TestConcurrentAccess TestConcurrentAccess - Test concurrent access
 func TestConcurrentAccess(t *testing.T) {
 	mgr, _, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -287,7 +287,7 @@ func TestConcurrentAccess(t *testing.T) {
 	taskID := "test_concurrent"
 	mgr.CreateTask(taskID, "claude")
 
-	// 并发更新状态
+	// Concurrent status update
 	done := make(chan bool)
 	for i := 0; i < 10; i++ {
 		go func() {
@@ -296,12 +296,12 @@ func TestConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// 等待所有 goroutine 完成
+	// Wait for all goroutines
 	for i := 0; i < 10; i++ {
 		<-done
 	}
 
-	// 验证没有 panic 或 race condition
+	// Verify no panic or race condition
 	state, err := mgr.LoadState(taskID)
 	if err != nil {
 		t.Fatalf("Failed to load state after concurrent access: %v", err)
@@ -312,7 +312,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 }
 
-// TestEventMarshaling 测试事件序列化
+// TestEventMarshaling TestEventMarshaling - Test event marshaling
 func TestEventMarshaling(t *testing.T) {
 	event := Event{
 		Seq:       42,
@@ -324,8 +324,8 @@ func TestEventMarshaling(t *testing.T) {
 		},
 	}
 
-	// 序列化应该成功
-	// （实际测试在 AddOutput 中已经覆盖了）
+	// Serialization should succeed
+	// （AlreadyTestin AddOutput inAlreadycovered）
 	if event.Seq != 42 {
 		t.Errorf("Expected seq=42, got %d", event.Seq)
 	}

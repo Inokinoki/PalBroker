@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-// mockCLI 创建一个 mock CLI 脚本
+// mockCLI Create a mock CLI script
 func mockCLI(t *testing.T, name, script string) string {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, name)
 
-	// 写入脚本
+	// Write script
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		t.Fatalf("Failed to write mock script: %v", err)
 	}
@@ -22,21 +22,21 @@ func mockCLI(t *testing.T, name, script string) string {
 	return scriptPath
 }
 
-// TestClaudeAdapterWithMock 使用 Mock 测试 Claude 适配器
+// TestClaudeAdapterWithMock Test Claude adapter with Mock
 func TestClaudeAdapterWithMock(t *testing.T) {
-	// 创建 mock claude 命令
+	// Create mock claude command
 	mockScript := `#!/bin/bash
 echo '{"type":"assistant","content":"Hello from mock Claude!"}'
 echo '{"type":"chunk","content":"This is a test response"}'
 `
 	mockPath := mockCLI(t, "claude", mockScript)
 
-	// 临时添加 mock 到 PATH
+	// Temporarily add mock to PATH
 	oldPath := os.Getenv("PATH")
 	os.Setenv("PATH", filepath.Dir(mockPath)+":"+oldPath)
 	defer os.Setenv("PATH", oldPath)
 
-	// 创建适配器
+	// Create adapter
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
 			Provider: "claude",
@@ -45,13 +45,13 @@ echo '{"type":"chunk","content":"This is a test response"}'
 		},
 	}
 
-	// 测试命令构建
+	// TestCommandBuild
 	cmd := adapter.BuildCommand(adapter.config)
 	if cmd.Path != mockPath {
 		t.Logf("Using mock claude at: %s", cmd.Path)
 	}
 
-	// 测试消息解析
+	// TestMessageParse
 	msg := `{"type":"assistant","content":"Hello"}`
 	parsed, err := adapter.ParseMessage(msg)
 	if err != nil {
@@ -67,7 +67,7 @@ echo '{"type":"chunk","content":"This is a test response"}'
 	}
 }
 
-// TestClaudeAdapterMockOutput 测试 Claude 输出解析
+// TestClaudeAdapterMockOutput Test Claude output parsing
 func TestClaudeAdapterMockOutput(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -109,7 +109,7 @@ func TestClaudeAdapterMockOutput(t *testing.T) {
 			name:     "invalid_json",
 			input:    `{"type": "invalid`,
 			wantType: "chunk",
-			wantErr:  false, // 应该降级到文本模式
+			wantErr:  false, // ShouldFallbacktoTextMode
 		},
 	}
 
@@ -131,9 +131,9 @@ func TestClaudeAdapterMockOutput(t *testing.T) {
 	}
 }
 
-// TestCodexAdapterMock 使用 Mock 测试 Codex 适配器
+// TestCodexAdapterMock Use Mock Test Codex adapter with Mock
 func TestCodexAdapterMock(t *testing.T) {
-	// 创建 mock codex 命令
+	// Create mock codex command
 	mockScript := `#!/bin/bash
 echo '{"message":{"role":"assistant","content":"Codex response"}}'
 `
@@ -151,26 +151,26 @@ echo '{"message":{"role":"assistant","content":"Codex response"}}'
 		},
 	}
 
-	// 测试命令构建
+	// TestCommandBuild
 	cmd := adapter.BuildCommand(adapter.config)
 	if !strings.Contains(cmd.Path, "codex") {
 		t.Errorf("Expected codex command, got %s", cmd.Path)
 	}
 
-	// 测试 Codex 特定格式解析
+	// Test Codex specificformatParse
 	msg := `{"message":{"role":"assistant","content":"Here's the fix"}}`
 	parsed, err := adapter.ParseMessage(msg)
 	if err != nil {
 		t.Fatalf("Failed to parse Codex message: %v", err)
 	}
 
-	// Codex 应该提取 message.content
+	// Codex should extract message.content
 	if parsed["type"] != "chunk" {
 		t.Errorf("Expected type=chunk, got %v", parsed["type"])
 	}
 }
 
-// TestCopilotAdapterMock 使用 Mock 测试 Copilot 适配器
+// TestCopilotAdapterMock Test Copilot adapter with Mock
 func TestCopilotAdapterMock(t *testing.T) {
 	adapter := &CopilotAdapter{
 		config: &CLIConfig{
@@ -178,18 +178,18 @@ func TestCopilotAdapterMock(t *testing.T) {
 		},
 	}
 
-	// Copilot 不支持 ACP
+	// Copilot does not support ACP
 	if adapter.SupportsACP() {
 		t.Error("Copilot should not support ACP")
 	}
 
-	// 测试命令构建
+	// TestCommandBuild
 	cmd := adapter.BuildCommand(adapter.config)
 	if !strings.Contains(cmd.Path, "copilot") {
 		t.Errorf("Expected copilot command, got %s", cmd.Path)
 	}
 
-	// 测试消息解析
+	// TestMessageParse
 	tests := []struct {
 		name  string
 		input string
@@ -212,7 +212,7 @@ func TestCopilotAdapterMock(t *testing.T) {
 	}
 }
 
-// TestGenericAdapterMock 测试通用适配器
+// TestGenericAdapterMock Test generic adapter
 func TestGenericAdapterMock(t *testing.T) {
 	adapter := &GenericAdapter{
 		config: &CLIConfig{
@@ -220,7 +220,7 @@ func TestGenericAdapterMock(t *testing.T) {
 		},
 	}
 
-	// 通用适配器不支持特殊功能
+	// GenericAdapterNotSupportspecial features
 	if adapter.SupportsACP() {
 		t.Error("Generic adapter should not support ACP")
 	}
@@ -228,14 +228,14 @@ func TestGenericAdapterMock(t *testing.T) {
 		t.Error("Generic adapter should not support JSON Stream")
 	}
 
-	// 测试命令构建
+	// TestCommandBuild
 	cmd := adapter.BuildCommand(adapter.config)
 	if cmd.Path != "unknown-cli" {
 		t.Errorf("Expected unknown-cli, got %s", cmd.Path)
 	}
 }
 
-// TestAdapterWithRealisticOutput 测试真实场景输出
+// TestAdapterWithRealisticOutput Test realistic output
 func TestAdapterWithRealisticOutput(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -243,7 +243,7 @@ func TestAdapterWithRealisticOutput(t *testing.T) {
 		},
 	}
 
-	// 模拟真实的 Claude 输出流
+	// Simulate realistic Claude output stream
 	realisticOutputs := []string{
 		`{"type":"system","message":"Starting task..."}`,
 		`{"type":"assistant","content":"I'll help you with that."}`,
@@ -269,7 +269,7 @@ func TestAdapterWithRealisticOutput(t *testing.T) {
 	}
 }
 
-// TestAdapterErrorHandling 测试错误处理
+// TestAdapterErrorHandling Test error handler
 func TestAdapterErrorHandling(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -277,7 +277,7 @@ func TestAdapterErrorHandling(t *testing.T) {
 		},
 	}
 
-	// 测试各种错误场景
+	// TestVariousErrorScenario
 	errorCases := []struct {
 		name  string
 		input string
@@ -292,7 +292,7 @@ func TestAdapterErrorHandling(t *testing.T) {
 
 	for _, tc := range errorCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 不应该 panic
+			// Should not panic
 			defer func() {
 				if r := recover(); r != nil {
 					t.Errorf("ParseMessage panicked: %v", r)
@@ -300,7 +300,7 @@ func TestAdapterErrorHandling(t *testing.T) {
 			}()
 
 			parsed, _ := adapter.ParseMessage(tc.input)
-			// 即使解析失败，也应该返回某种结果（降级到文本模式）
+			// Should return result even on error (fallback to text)
 			if parsed == nil {
 				t.Error("Expected non-nil result even on error")
 			}
@@ -308,7 +308,7 @@ func TestAdapterErrorHandling(t *testing.T) {
 	}
 }
 
-// TestAdapterCommandBuilder 测试命令构建器
+// TestAdapterCommandBuilder Test command buildinger
 func TestAdapterCommandBuilder(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -362,7 +362,7 @@ func TestAdapterCommandBuilder(t *testing.T) {
 	}
 }
 
-// TestAdapterCapabilities 测试适配器能力
+// TestAdapterCapabilities Test adapter capabilities
 func TestAdapterCapabilities(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -415,9 +415,9 @@ func TestAdapterCapabilities(t *testing.T) {
 	}
 }
 
-// TestAdapterModeDetection 测试适配器模式检测
+// TestAdapterModeDetection Test adapter mode detection
 func TestAdapterModeDetection(t *testing.T) {
-	// 测试 supportsACP 函数
+	// Test supportsACP function
 	tests := []struct {
 		provider string
 		wantACP  bool
@@ -439,13 +439,13 @@ func TestAdapterModeDetection(t *testing.T) {
 	}
 }
 
-// TestAdapterJSONParsing 测试 JSON 解析
+// TestAdapterJSONParsing Test JSON parsing
 func TestAdapterJSONParsing(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{},
 	}
 
-	// 测试复杂的 JSON 结构
+	// TestComplex JSON Structure
 	complexJSON := `{
 		"type": "tool_use",
 		"name": "edit",
@@ -470,20 +470,20 @@ func TestAdapterJSONParsing(t *testing.T) {
 		t.Errorf("Expected name=edit, got %v", parsed["name"])
 	}
 
-	// 验证可以序列化回 JSON
+	// Verify can serialize back to JSON
 	_, err = json.Marshal(parsed)
 	if err != nil {
 		t.Errorf("Failed to marshal parsed result: %v", err)
 	}
 }
 
-// TestAdapterStreamProcessing 测试流处理
+// TestAdapterStreamProcessing Test stream processing
 func TestAdapterStreamProcessing(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{},
 	}
 
-	// 模拟流式输出
+	// Simulate stream output
 	stream := []string{
 		`{"type":"chunk","content":"H"}`,
 		`{"type":"chunk","content":"e"}`,
@@ -505,9 +505,9 @@ func TestAdapterStreamProcessing(t *testing.T) {
 	}
 }
 
-// TestAdapterTimeout 测试超时处理
+// TestAdapterTimeout Test timeout handling
 func TestAdapterTimeout(t *testing.T) {
-	// 创建一个会超时的 mock CLI
+	// Create a mock CLI that times out
 	mockScript := `#!/bin/bash
 sleep 10
 echo "This should not appear"
@@ -526,12 +526,12 @@ echo "This should not appear"
 
 	cmd := adapter.BuildCommand(adapter.config)
 
-	// 启动命令
+	// StartCommand
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("Failed to start command: %v", err)
 	}
 
-	// 设置超时
+	// Set timeout
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
@@ -539,7 +539,7 @@ echo "This should not appear"
 
 	select {
 	case <-time.After(2 * time.Second):
-		// 超时，杀死进程
+		// Timeout，killProcess
 		cmd.Process.Kill()
 		t.Log("Command timed out as expected")
 	case err := <-done:

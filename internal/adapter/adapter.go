@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-// CLIConfig CLI 配置
+// CLIConfig - CLI configuration
 type CLIConfig struct {
 	Provider string
 	WorkDir  string
@@ -19,7 +19,7 @@ type CLIConfig struct {
 	Options  map[string]string
 }
 
-// CLIProcess CLI 进程
+// CLIProcess - CLI process
 type CLIProcess struct {
 	Cmd    *exec.Cmd
 	Stdin  io.WriteCloser
@@ -28,7 +28,7 @@ type CLIProcess struct {
 	Pid    int
 }
 
-// Stop 停止 CLI 进程
+// Stop - Stop the CLI process
 func (c *CLIProcess) Stop() error {
 	if c.Cmd != nil && c.Cmd.Process != nil {
 		return c.Cmd.Process.Kill()
@@ -36,33 +36,33 @@ func (c *CLIProcess) Stop() error {
 	return nil
 }
 
-// Adapter CLI 适配器接口
+// Adapter - CLI adapter interface
 type Adapter interface {
 	SupportsACP() bool
-	SupportsJSONStream() bool // 支持 JSON Stream 输出
+	SupportsJSONStream() bool // Supports JSON Stream output
 	BuildCommand(config *CLIConfig) *exec.Cmd
 	ParseMessage(line string) (map[string]interface{}, error)
 	SendCommand(cmd string, params map[string]interface{}) error
 	GetCapabilities() []string
 }
 
-// Manager 适配器管理器
+// Manager - Adapter manager
 type Manager struct {
 	adapter   Adapter
-	acpClient *ACPClient // ACP 客户端（如果支持）
+	acpClient *ACPClient // ACP client (if supported)
 	config    *CLIConfig
-	mode      AdapterMode // ACP 或 Text 模式
+	mode      AdapterMode // ACP or Text mode
 }
 
-// AdapterMode 适配器模式
+// AdapterMode - Adapter mode
 type AdapterMode string
 
 const (
-	ModeACP  AdapterMode = "acp"  // ACP 协议模式
-	ModeText AdapterMode = "text" // 文本解析模式
+	ModeACP  AdapterMode = "acp"  // ACP protocol mode
+	ModeText AdapterMode = "text" // Text parsing mode
 )
 
-// NewAdapter 创建适配器
+// NewAdapter - Create a new adapter
 func NewAdapter(provider, workDir string) *Manager {
 	config := &CLIConfig{
 		Provider: provider,
@@ -70,13 +70,13 @@ func NewAdapter(provider, workDir string) *Manager {
 		Options:  make(map[string]string),
 	}
 
-	// 检查是否支持 ACP
+	// Check if ACP is supported
 	if supportsACP(provider) {
 		acpClient, err := NewACPClient(provider)
 		if err == nil {
-			// 初始化 ACP 客户端
+			// Initialize ACP client
 			if err := acpClient.Start(); err == nil {
-				// 创建会话
+				// Create session
 				_, err := acpClient.NewSession(workDir, []interface{}{})
 				if err == nil {
 					return &Manager{
@@ -87,10 +87,10 @@ func NewAdapter(provider, workDir string) *Manager {
 				}
 			}
 		}
-		// ACP 初始化失败，降级到文本模式
+		// Fallback to text mode if ACP initialization fails
 	}
 
-	// 文本模式
+	// Text mode
 	var adapter Adapter
 	switch provider {
 	case "claude":
@@ -110,32 +110,32 @@ func NewAdapter(provider, workDir string) *Manager {
 	}
 }
 
-// supportsACP 检查 provider 是否支持 ACP
+// supportsACP - Check if provider supports ACP
 func supportsACP(provider string) bool {
 	switch provider {
 	case "copilot", "copilot-acp":
-		return true // GitHub Copilot 支持 ACP
+		return true // GitHub Copilot supports ACP
 	case "opencode":
-		return true // OpenCode 支持 ACP
+		return true // OpenCode supports ACP
 	default:
 		return false
 	}
 }
 
-// Start 启动 CLI
+// Start Start - Start CLI
 func (m *Manager) Start() (*CLIProcess, error) {
-	// ACP 模式
+	// ACP mode
 	if m.mode == ModeACP && m.acpClient != nil {
 		return &CLIProcess{
 			Cmd:    m.acpClient.cmd,
 			Stdin:  m.acpClient.stdin,
 			Stdout: m.acpClient.stdout,
-			Stderr: nil, // ACP 通常不使用 stderr
+			Stderr: nil, // ACP usually does not use stderr
 			Pid:    m.acpClient.Pid(),
 		}, nil
 	}
 
-	// 文本模式
+	// Text mode
 	cmd := m.adapter.BuildCommand(m.config)
 	cmd.Dir = m.config.WorkDir
 
@@ -167,17 +167,17 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	}, nil
 }
 
-// SendCommand 发送命令到 CLI
+// SendCommand SendCommand - Send command to CLI
 func (m *Manager) SendCommand(cmd string, params map[string]interface{}) error {
 	return m.adapter.SendCommand(cmd, params)
 }
 
-// GetCapabilities 获取 CLI 能力
+// GetCapabilities GetCapabilities - Get CLI capabilities
 func (m *Manager) GetCapabilities() []string {
 	return m.adapter.GetCapabilities()
 }
 
-// ClaudeAdapter Claude Code 适配器
+// ClaudeAdapter - Claude Code adapter
 type ClaudeAdapter struct {
 	config *CLIConfig
 	mu     sync.Mutex
@@ -185,27 +185,27 @@ type ClaudeAdapter struct {
 }
 
 func (a *ClaudeAdapter) SupportsACP() bool {
-	// Claude Code 不支持 ACP，但支持 JSON stream 输出
+	// Claude Code does not support ACP, but supports JSON stream output
 	return false
 }
 
 func (a *ClaudeAdapter) SupportsJSONStream() bool {
-	// Claude Code 支持 --output-format stream-json
+	// Claude Code supports --output-format stream-json
 	return true
 }
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{
-		"-p",                             // print mode (非交互)
-		"--output-format", "stream-json", // JSON stream 输出
+		"-p",                             // print mode (non-interactive)
+		"--output-format", "stream-json", // JSON stream output
 	}
 
-	// 文件参数
+	// File parameters
 	for _, file := range config.Files {
 		args = append(args, "--add-dir", file)
 	}
 
-	// 任务描述作为最后一个参数
+	// Task description as last parameter
 	if config.Task != "" {
 		args = append(args, config.Task)
 	}
@@ -214,12 +214,12 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 }
 
 func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
-	// Claude Code 输出为人类可读文本，需要模式匹配解析
+	// Claude Code outputs human-readable text, needs pattern matching
 
-	// 尝试解析 JSON（如果 CLI 支持）
+	// Try to parse JSON (if CLI supports it)
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
-		// 处理 null、数组、数字等非对象类型
+		// Handle null, array, number and other non-object types
 		if msg == nil {
 			return map[string]interface{}{
 				"type":    "chunk",
@@ -232,14 +232,14 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 		return msg, nil
 	}
 
-	// 文本模式匹配
+	// Text modeMatch
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
 }
 
-// parseTextOutput 解析 Claude Code 文本输出
+// parseTextOutput parseTextOutput - Parse Claude Code text output
 func (a *ClaudeAdapter) parseTextOutput(line string) map[string]interface{} {
-	// 识别代码块
+	// Identify code blocks
 	if strings.HasPrefix(line, "```") {
 		return map[string]interface{}{
 			"type":    "code_block",
@@ -247,7 +247,7 @@ func (a *ClaudeAdapter) parseTextOutput(line string) map[string]interface{} {
 		}
 	}
 
-	// 识别文件操作
+	// Identify file operations
 	lower := strings.ToLower(line)
 	if strings.Contains(lower, "editing") ||
 		strings.Contains(lower, "creating") ||
@@ -259,7 +259,7 @@ func (a *ClaudeAdapter) parseTextOutput(line string) map[string]interface{} {
 		}
 	}
 
-	// 识别命令执行
+	// Identify command execution
 	if strings.Contains(lower, "running") ||
 		strings.Contains(lower, "executing") {
 		return map[string]interface{}{
@@ -268,7 +268,7 @@ func (a *ClaudeAdapter) parseTextOutput(line string) map[string]interface{} {
 		}
 	}
 
-	// 默认为文本输出
+	// Default to text output
 	return map[string]interface{}{
 		"type":    "chunk",
 		"content": line,
@@ -298,20 +298,20 @@ func (a *ClaudeAdapter) GetCapabilities() []string {
 	return []string{"text_output", "file_edit", "multi_turn", "streaming"}
 }
 
-// CodexAdapter Codex CLI 适配器
+// CodexAdapter - Codex CLI adapter
 type CodexAdapter struct {
 	config     *CLIConfig
-	threadID   string // 保存的会话 ID
-	sessionDir string // 会话目录
+	threadID   string // Saved session ID
+	sessionDir string // Session directory
 }
 
 func (a *CodexAdapter) SupportsACP() bool {
-	// 根据调研，Codex CLI 不支持标准 ACP 格式
+	// According to research, Codex CLI does not support standard ACP format
 	return false
 }
 
 func (a *CodexAdapter) SupportsJSONStream() bool {
-	// 检查 codex exec 是否支持 --json
+	// Check if codex exec supports --json
 	cmd := exec.Command("codex", "exec", "--help")
 	output, _ := cmd.CombinedOutput()
 	return strings.Contains(string(output), "--json")
@@ -320,12 +320,12 @@ func (a *CodexAdapter) SupportsJSONStream() bool {
 func (a *CodexAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	args := []string{"exec"}
 
-	// 如果支持 JSON，添加 --json
+	// Add --json if supported
 	if a.SupportsJSONStream() {
 		args = append(args, "--json")
 	}
 
-	// 如果有 thread_id，使用 resume 恢复会话
+	// Use resume to restore session if thread_id exists
 	if a.threadID != "" {
 		args = append(args, "resume", "--last")
 	}
@@ -338,7 +338,7 @@ func (a *CodexAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 }
 
 func (a *CodexAdapter) ParseMessage(line string) (map[string]interface{}, error) {
-	// 尝试解析 JSON
+	// Try to parse JSON
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
 		if _, ok := msg["type"]; !ok {
@@ -347,14 +347,14 @@ func (a *CodexAdapter) ParseMessage(line string) (map[string]interface{}, error)
 		return msg, nil
 	}
 
-	// 文本模式匹配
+	// Text modeMatch
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
 }
 
-// parseTextOutput 解析 Codex 文本输出
+// parseTextOutput Parse Codex TextOutput
 func (a *CodexAdapter) parseTextOutput(line string) map[string]interface{} {
-	// 类似 Claude 的解析逻辑
+	// Similar Claude ParseLogic
 	lower := strings.ToLower(line)
 
 	if strings.Contains(lower, "editing") || strings.Contains(lower, "creating") {
@@ -378,7 +378,7 @@ func (a *CodexAdapter) parseTextOutput(line string) map[string]interface{} {
 }
 
 func (a *CodexAdapter) SendCommand(cmd string, params map[string]interface{}) error {
-	// Codex CLI 可能不支持交互式命令
+	// Codex CLI MayNotSupportinteractiveCommand
 	return fmt.Errorf("Codex CLI does not support interactive commands")
 }
 
@@ -386,19 +386,19 @@ func (a *CodexAdapter) GetCapabilities() []string {
 	return []string{"text_output", "streaming"}
 }
 
-// CopilotAdapter GitHub Copilot CLI 适配器
+// CopilotAdapter GitHub CopilotAdapter - Copilot CLI adapter
 type CopilotAdapter struct {
 	config *CLIConfig
 }
 
 func (a *CopilotAdapter) SupportsACP() bool {
-	// Copilot 支持 ACP，在 NewAdapter 中会优先使用 ACP 模式
-	// 如果降级到 Text 模式，返回 false
+	// Copilot supports ACP, will prioritize ACP mode in NewAdapter
+	// IfFallbackto Text Mode，Return false
 	return false
 }
 
 func (a *CopilotAdapter) SupportsJSONStream() bool {
-	// 待确认，先返回 false
+	// To be confirmed,Return false
 	return false
 }
 
@@ -413,7 +413,7 @@ func (a *CopilotAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 }
 
 func (a *CopilotAdapter) ParseMessage(line string) (map[string]interface{}, error) {
-	// 尝试解析 JSON
+	// Try to parse JSON
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err == nil {
 		if _, ok := msg["type"]; !ok {
@@ -422,12 +422,12 @@ func (a *CopilotAdapter) ParseMessage(line string) (map[string]interface{}, erro
 		return msg, nil
 	}
 
-	// 文本模式匹配
+	// Text modeMatch
 	parsed := a.parseTextOutput(line)
 	return parsed, nil
 }
 
-// parseTextOutput 解析 Copilot 文本输出
+// parseTextOutput Parse Copilot TextOutput
 func (a *CopilotAdapter) parseTextOutput(line string) map[string]interface{} {
 	lower := strings.ToLower(line)
 
@@ -459,7 +459,7 @@ func (a *CopilotAdapter) GetCapabilities() []string {
 	return []string{"text_output", "streaming"}
 }
 
-// GenericAdapter 通用适配器（用于未知 CLI）
+// GenericAdapter - Generic adapter (for unknown CLI)
 type GenericAdapter struct {
 	config *CLIConfig
 }
@@ -491,14 +491,14 @@ func (a *GenericAdapter) GetCapabilities() []string {
 	return []string{"text_output"}
 }
 
-// StreamForwarder 流转发器
+// StreamForwarder StreamForwarder
 type StreamForwarder struct {
 	reader  io.Reader
 	handler func(string)
 	done    chan struct{}
 }
 
-// NewStreamForwarder 创建流转发器
+// NewStreamForwarder CreateStreamForwarder
 func NewStreamForwarder(reader io.Reader, handler func(string)) *StreamForwarder {
 	return &StreamForwarder{
 		reader:  reader,
@@ -507,7 +507,7 @@ func NewStreamForwarder(reader io.Reader, handler func(string)) *StreamForwarder
 	}
 }
 
-// Start 开始转发
+// Start - Start forwarding
 func (f *StreamForwarder) Start() {
 	go func() {
 		defer close(f.done)
@@ -519,18 +519,18 @@ func (f *StreamForwarder) Start() {
 	}()
 }
 
-// Done 等待完成
+// Done WaitComplete
 func (f *StreamForwarder) Done() <-chan struct{} {
 	return f.done
 }
 
-// ACPMessageHandler ACP 消息处理器
+// ACPMessageHandler ACP MessageHandleer
 type ACPMessageHandler struct {
 	client  *ACPClient
 	handler func(map[string]interface{})
 }
 
-// NewACPMessageHandler 创建 ACP 消息处理器
+// NewACPMessageHandler Create ACP MessageHandleer
 func NewACPMessageHandler(client *ACPClient, handler func(map[string]interface{})) *ACPMessageHandler {
 	return &ACPMessageHandler{
 		client:  client,
@@ -538,7 +538,7 @@ func NewACPMessageHandler(client *ACPClient, handler func(map[string]interface{}
 	}
 }
 
-// Start 开始处理 ACP 消息
+// Start - Start handling ACP messages
 func (h *ACPMessageHandler) Start() {
 	h.client.Listen(func(msg *ACPMessage) {
 		parsed := h.client.ParseMessage(msg)
@@ -546,7 +546,7 @@ func (h *ACPMessageHandler) Start() {
 	})
 }
 
-// SendCommand 发送命令到 ACP Server
+// SendCommand SendCommandto ACP Server
 func (m *Manager) SendACPPrompt(prompt string) error {
 	if m.mode != ModeACP || m.acpClient == nil {
 		return fmt.Errorf("ACP mode not enabled")
@@ -554,7 +554,7 @@ func (m *Manager) SendACPPrompt(prompt string) error {
 	return m.acpClient.Prompt(prompt)
 }
 
-// GetMode 获取当前模式
+// GetMode GetCurrentMode
 func (m *Manager) GetMode() AdapterMode {
 	return m.mode
 }

@@ -10,25 +10,25 @@ import (
 	"time"
 )
 
-// TaskState 任务状态
+// TaskState Task state
 type TaskState struct {
 	TaskID    string `json:"task_id"`
 	Provider  string `json:"provider"`
 	Status    string `json:"status"` // running, completed, failed, stopped
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
-	Seq       int64  `json:"seq"` // 当前序号
+	Seq       int64  `json:"seq"` // Current sequence
 }
 
-// Device 连接的设备
+// Device Connected device
 type Device struct {
 	DeviceID    string `json:"device_id"`
 	ConnectedAt int64  `json:"connected_at"`
 	LastActive  int64  `json:"last_active"`
-	LastSeq     int64  `json:"last_seq"` // 最后读取的序号
+	LastSeq     int64  `json:"last_seq"` // Last read sequence
 }
 
-// Event 输出事件
+// Event Output event
 type Event struct {
 	Seq       int64       `json:"seq"`
 	Type      string      `json:"type"` // chunk, file, status, error
@@ -36,18 +36,18 @@ type Event struct {
 	Data      interface{} `json:"data"`
 }
 
-// Manager 状态管理器
+// Manager State manager
 type Manager struct {
 	sessionDir string
 	mu         sync.RWMutex
 }
 
-// NewManager 创建状态管理器
+// NewManager CreateState manager
 func NewManager(sessionDir string) *Manager {
 	return &Manager{sessionDir: sessionDir}
 }
 
-// CreateTask 创建任务
+// CreateTask Create task
 func (m *Manager) CreateTask(taskID, provider string) error {
 	dir := filepath.Join(m.sessionDir, taskID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -66,7 +66,7 @@ func (m *Manager) CreateTask(taskID, provider string) error {
 	return m.saveState(taskID, &state)
 }
 
-// LoadState 加载任务状态
+// LoadState LoadTask state
 func (m *Manager) LoadState(taskID string) (*TaskState, error) {
 	data, err := os.ReadFile(filepath.Join(m.sessionDir, taskID, "state.json"))
 	if err != nil {
@@ -77,7 +77,7 @@ func (m *Manager) LoadState(taskID string) (*TaskState, error) {
 	return &state, json.Unmarshal(data, &state)
 }
 
-// UpdateStatus 更新任务状态
+// UpdateStatus - Update task state
 func (m *Manager) UpdateStatus(taskID, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -93,7 +93,7 @@ func (m *Manager) UpdateStatus(taskID, status string) error {
 	return m.saveState(taskID, state)
 }
 
-// NextSeq 获取下一个序号
+// NextSeq Get next sequence number
 func (m *Manager) NextSeq(taskID string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -113,7 +113,7 @@ func (m *Manager) NextSeq(taskID string) (int64, error) {
 	return state.Seq, nil
 }
 
-// AddOutput 添加输出事件
+// AddOutput AddOutput event
 func (m *Manager) AddOutput(taskID string, event Event) error {
 	seq, err := m.NextSeq(taskID)
 	if err != nil {
@@ -128,7 +128,7 @@ func (m *Manager) AddOutput(taskID string, event Event) error {
 		return err
 	}
 
-	// 追加写入 output.jsonl
+	// AppendWrite output.jsonl
 	f, err := os.OpenFile(
 		filepath.Join(m.sessionDir, taskID, "output.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
@@ -143,7 +143,7 @@ func (m *Manager) AddOutput(taskID string, event Event) error {
 	return err
 }
 
-// AddDevice 添加设备
+// AddDevice Add device
 func (m *Manager) AddDevice(taskID, deviceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -153,7 +153,7 @@ func (m *Manager) AddDevice(taskID, deviceID string) error {
 		devices = []Device{}
 	}
 
-	// 检查是否存在
+	// CheckIfExist
 	for i, d := range devices {
 		if d.DeviceID == deviceID {
 			devices[i].LastActive = time.Now().UnixMilli()
@@ -161,7 +161,7 @@ func (m *Manager) AddDevice(taskID, deviceID string) error {
 		}
 	}
 
-	// 添加新设备
+	// AddNewDevice
 	devices = append(devices, Device{
 		DeviceID:    deviceID,
 		ConnectedAt: time.Now().UnixMilli(),
@@ -172,7 +172,7 @@ func (m *Manager) AddDevice(taskID, deviceID string) error {
 	return m.saveDevices(taskID, devices)
 }
 
-// UpdateDeviceSeq 更新设备最后读取序号
+// UpdateDeviceSeq - Update device last read sequence
 func (m *Manager) UpdateDeviceSeq(taskID, deviceID string, seq int64) error {
 	devices, err := m.loadDevices(taskID)
 	if err != nil {
@@ -189,7 +189,7 @@ func (m *Manager) UpdateDeviceSeq(taskID, deviceID string, seq int64) error {
 	return m.saveDevices(taskID, devices)
 }
 
-// GetIncrementalOutput 获取增量输出
+// GetIncrementalOutput Get incremental output
 func (m *Manager) GetIncrementalOutput(taskID string, fromSeq int64) ([]Event, error) {
 	path := filepath.Join(m.sessionDir, taskID, "output.jsonl")
 
@@ -224,7 +224,7 @@ func (m *Manager) GetIncrementalOutput(taskID string, fromSeq int64) ([]Event, e
 	return events, scanner.Err()
 }
 
-// ListTasks 列出所有任务
+// ListTasks List all tasks
 func (m *Manager) ListTasks() ([]string, error) {
 	entries, err := os.ReadDir(m.sessionDir)
 	if err != nil {

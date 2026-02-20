@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestClaudeAdapterSupportsJSONStream 测试 Claude 适配器 JSON Stream 支持
+// TestClaudeAdapterSupportsJSONStream Test Claude adapter JSON Stream support
 func TestClaudeAdapterSupportsJSONStream(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -14,13 +14,13 @@ func TestClaudeAdapterSupportsJSONStream(t *testing.T) {
 		},
 	}
 
-	// Claude 应该支持 JSON Stream
+	// Claude ShouldSupport JSON Stream
 	if !adapter.SupportsJSONStream() {
 		t.Error("Expected Claude adapter to support JSON Stream")
 	}
 }
 
-// TestClaudeAdapterBuildCommand 测试 Claude 命令构建
+// TestClaudeAdapterBuildCommand Test Claude command building
 func TestClaudeAdapterBuildCommand(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -33,12 +33,12 @@ func TestClaudeAdapterBuildCommand(t *testing.T) {
 
 	cmd := adapter.BuildCommand(adapter.config)
 
-	// 验证命令
+	// Verify command
 	if cmd.Path != "claude" {
 		t.Errorf("Expected command 'claude', got %s", cmd.Path)
 	}
 
-	// 验证参数包含 -p 和 --output-format
+	// Verify parameters include -p and --output-format
 	args := strings.Join(cmd.Args, " ")
 	if !strings.Contains(args, "-p") {
 		t.Error("Expected -p flag for print mode")
@@ -51,7 +51,7 @@ func TestClaudeAdapterBuildCommand(t *testing.T) {
 	}
 }
 
-// TestClaudeAdapterParseMessage 测试 Claude 消息解析
+// TestClaudeAdapterParseMessage Test Claude message parsing
 func TestClaudeAdapterParseMessage(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{
@@ -59,7 +59,7 @@ func TestClaudeAdapterParseMessage(t *testing.T) {
 		},
 	}
 
-	// 测试 JSON 消息
+	// Test JSON Message
 	jsonMsg := `{"type": "assistant", "content": "Hello"}`
 	parsed, err := adapter.ParseMessage(jsonMsg)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestClaudeAdapterParseMessage(t *testing.T) {
 		t.Errorf("Expected type=assistant, got %v", parsed["type"])
 	}
 
-	// 测试文本消息
+	// TestTextMessage
 	textMsg := "Let me analyze this code..."
 	parsed, err = adapter.ParseMessage(textMsg)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestClaudeAdapterParseMessage(t *testing.T) {
 	}
 }
 
-// TestCodexAdapterSupportsJSONStream 测试 Codex 适配器
+// TestCodexAdapterSupportsJSONStream Test Codex adapter with Mock
 func TestCodexAdapterSupportsJSONStream(t *testing.T) {
 	adapter := &CodexAdapter{
 		config: &CLIConfig{
@@ -91,12 +91,12 @@ func TestCodexAdapterSupportsJSONStream(t *testing.T) {
 		},
 	}
 
-	// Codex 的 JSON Stream 支持需要验证（可能不支持）
-	// 这里只是测试方法存在且可调用
+	// Codex JSON Stream support needs verification (may not support)
+	// Just testing method exists and is callable
 	_ = adapter.SupportsJSONStream()
 }
 
-// TestCodexAdapterBuildCommand 测试 Codex 命令构建
+// TestCodexAdapterBuildCommand Test Codex command building
 func TestCodexAdapterBuildCommand(t *testing.T) {
 	adapter := &CodexAdapter{
 		config: &CLIConfig{
@@ -108,19 +108,19 @@ func TestCodexAdapterBuildCommand(t *testing.T) {
 
 	cmd := adapter.BuildCommand(adapter.config)
 
-	// 验证命令
+	// Verify command
 	if cmd.Path != "codex" {
 		t.Errorf("Expected command 'codex', got %s", cmd.Path)
 	}
 
-	// 验证参数包含 exec
+	// Verify parameters include exec
 	args := strings.Join(cmd.Args, " ")
 	if !strings.Contains(args, "exec") {
 		t.Error("Expected 'exec' subcommand")
 	}
 }
 
-// TestCopilotAdapterACP 测试 Copilot ACP 支持
+// TestCopilotAdapterACP Test Copilot ACP support
 func TestCopilotAdapterACP(t *testing.T) {
 	adapter := &CopilotAdapter{
 		config: &CLIConfig{
@@ -128,13 +128,13 @@ func TestCopilotAdapterACP(t *testing.T) {
 		},
 	}
 
-	// Copilot 不支持 ACP（会降级到 text 模式）
+	// Copilot does not support ACP（WillFallbackto text Mode）
 	if adapter.SupportsACP() {
 		t.Error("Copilot adapter should not support ACP in text mode")
 	}
 }
 
-// TestGenericAdapter 测试通用适配器
+// TestGenericAdapter Test generic adapter
 func TestGenericAdapter(t *testing.T) {
 	adapter := &GenericAdapter{
 		config: &CLIConfig{
@@ -142,7 +142,7 @@ func TestGenericAdapter(t *testing.T) {
 		},
 	}
 
-	// 通用适配器不支持 ACP 或 JSON Stream
+	// Generic adapter does not support ACP Or JSON Stream
 	if adapter.SupportsACP() {
 		t.Error("Generic adapter should not support ACP")
 	}
@@ -151,14 +151,14 @@ func TestGenericAdapter(t *testing.T) {
 		t.Error("Generic adapter should not support JSON Stream")
 	}
 
-	// 测试命令构建
+	// TestCommandBuild
 	cmd := adapter.BuildCommand(adapter.config)
 	if cmd.Path != "unknown-cli" {
 		t.Errorf("Expected command 'unknown-cli', got %s", cmd.Path)
 	}
 }
 
-// TestAdapterModeConstants 测试适配器模式常量
+// TestAdapterModeConstants Test adapter mode constants
 func TestAdapterModeConstants(t *testing.T) {
 	if ModeACP != "acp" {
 		t.Errorf("Expected ModeACP='acp', got %s", ModeACP)
@@ -169,20 +169,20 @@ func TestAdapterModeConstants(t *testing.T) {
 	}
 }
 
-// TestCLIProcessStop 测试 CLI 进程停止
+// TestCLIProcessStop Test CLI process stop
 func TestCLIProcessStop(t *testing.T) {
-	// 创建一个 mock 进程
+	// Create a mock process
 	process := &CLIProcess{
 		Pid: 12345,
 	}
 
-	// Stop 方法不应该 panic
+	// Stop method should not panic
 	err := process.Stop()
-	// 注意：因为没有实际进程，可能会失败，但不应该 panic
+	// Note: May fail without real process, but should not panic
 	_ = err
 }
 
-// TestCLIConfig 测试 CLI 配置
+// TestCLIConfig Test CLI config
 func TestCLIConfig(t *testing.T) {
 	config := &CLIConfig{
 		Provider: "claude",
@@ -209,36 +209,36 @@ func TestCLIConfig(t *testing.T) {
 	}
 }
 
-// TestAdapterInterface 测试适配器接口实现
+// TestAdapterInterface Test adapter interface implementation
 func TestAdapterInterface(t *testing.T) {
-	// 验证所有适配器都实现了 Adapter 接口
+	// Verify all adapters implement Adapter interface
 	var _ Adapter = &ClaudeAdapter{}
 	var _ Adapter = &CodexAdapter{}
 	var _ Adapter = &CopilotAdapter{}
 	var _ Adapter = &GenericAdapter{}
 }
 
-// TestParseMessageError 测试错误消息解析
+// TestParseMessageError Test error message parsing
 func TestParseMessageError(t *testing.T) {
 	adapter := &ClaudeAdapter{
 		config: &CLIConfig{},
 	}
 
-	// 测试无效 JSON
+	// Testinvalid JSON
 	invalidJSON := `{"type": "chunk", invalid}`
 	parsed, err := adapter.ParseMessage(invalidJSON)
 	if err != nil {
-		// 应该降级到文本模式，不返回错误
+		// Should fallback to text mode, no error
 		t.Logf("Got error (expected): %v", err)
 	}
 
-	// 即使解析失败，也应该返回某种结果
+	// Should return some result even on parse error
 	if parsed == nil {
 		t.Error("Expected non-nil result even on parse error")
 	}
 }
 
-// TestSupportsACPFunction 测试 supportsACP 函数
+// TestSupportsACPFunction Test supportsACP function
 func TestSupportsACPFunction(t *testing.T) {
 	tests := []struct {
 		provider string
