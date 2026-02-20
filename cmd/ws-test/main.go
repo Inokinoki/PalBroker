@@ -97,7 +97,7 @@ func main() {
 					"quest_id": config.QuestID,
 				},
 			}
-			sendMessage(conn, msg)
+			sendMessage(conn, msg, config.Verbose)
 		}
 	}()
 
@@ -115,13 +115,15 @@ func main() {
 				return
 			}
 
-			if config.Verbose {
-				log.Printf("📥 Received: %s", string(message))
-			}
+			// Always log raw message for debugging
+			log.Printf("📥 Raw received: %s", string(message))
 
 			// Pretty print JSON
 			var msg Message
 			if err := json.Unmarshal(message, &msg); err == nil {
+				if config.Verbose {
+					log.Printf("📥 Parsed: Type=%s, Data=%v", msg.Type, msg.Data)
+				}
 				printMessage(msg)
 			} else {
 				fmt.Printf("📥 %s\n", string(message))
@@ -140,18 +142,18 @@ func main() {
 				"task":     config.Task,
 			},
 		}
-		sendMessage(conn, msg)
+		sendMessage(conn, msg, config.Verbose)
 	}
 
 	// Test mode, Interactive mode, or simple wait
 	if config.TestMode {
 		runTests(conn, config)
 	} else if config.Interactive {
-		log.Println("📝 Interactive mode - type messages and press Enter")
-		log.Println("Commands:")
-		log.Println("  /status - Request status")
-		log.Println("  /quit   - Exit")
-		log.Println("")
+		fmt.Println("📝 Interactive mode - type messages and press Enter")
+		fmt.Println("Commands:")
+		fmt.Println("  /status - Request status")
+		fmt.Println("  /quit   - Exit")
+		fmt.Println("")
 
 		reader := bufio.NewReader(os.Stdin)
 		for {
@@ -166,7 +168,7 @@ func main() {
 
 			// Handle commands
 			if input == "/quit" || input == "/exit" {
-				log.Println("👋 Goodbye!")
+				fmt.Println("👋 Goodbye!")
 				return
 			}
 
@@ -178,7 +180,7 @@ func main() {
 						"quest_id": config.QuestID,
 					},
 				}
-				sendMessage(conn, msg)
+				sendMessage(conn, msg, config.Verbose)
 				continue
 			}
 
@@ -192,12 +194,12 @@ func main() {
 						"content":  input,
 					},
 				}
-				sendMessage(conn, msg)
+				sendMessage(conn, msg, config.Verbose)
 			}
 		}
 	} else {
 		// Simple mode: wait for duration or interrupt
-		log.Printf("⏳ Waiting for %d seconds (Ctrl+C to exit)...", config.Duration)
+		fmt.Printf("⏳ Waiting for %d seconds (Ctrl+C to exit)...\n", config.Duration)
 		
 		done := make(chan bool)
 		go func() {
@@ -207,14 +209,14 @@ func main() {
 		
 		select {
 		case <-done:
-			log.Println("\n👋 Disconnecting...")
+			fmt.Println("\n👋 Disconnecting...")
 		case <-time.After(time.Duration(config.Duration) * time.Second):
-			log.Printf("\n✅ Test duration completed (%d seconds)", config.Duration)
+			fmt.Printf("\n✅ Test duration completed (%d seconds)\n", config.Duration)
 		}
 	}
 }
 
-func sendMessage(conn *websocket.Conn, msg Message) {
+func sendMessage(conn *websocket.Conn, msg Message, verbose bool) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("❌ Marshal error: %v", err)
@@ -226,7 +228,10 @@ func sendMessage(conn *websocket.Conn, msg Message) {
 		return
 	}
 
-	log.Printf("📤 Sent: %s", msg.Type)
+	// Only log non-heartbeat messages or when verbose
+	if verbose || msg.Type != "heartbeat" {
+		log.Printf("📤 Sent: %s", msg.Type)
+	}
 }
 
 func printMessage(msg Message) {
@@ -284,7 +289,7 @@ func printMessage(msg Message) {
 
 // runTests - Run automated WebSocket tests
 func runTests(conn *websocket.Conn, config Config) {
-	log.Println("🧪 Running WebSocket tests...")
+	fmt.Println("🧪 Running WebSocket tests...")
 	fmt.Println("")
 	
 	testResults := make(map[string]bool)
@@ -302,7 +307,7 @@ func runTests(conn *websocket.Conn, config Config) {
 			"quest_id": config.QuestID,
 		},
 	}
-	sendMessage(conn, msg)
+	sendMessage(conn, msg, config.Verbose)
 	testResults["heartbeat"] = true
 	fmt.Println("✅ Test 2: Heartbeat sent")
 	
@@ -315,7 +320,7 @@ func runTests(conn *websocket.Conn, config Config) {
 			"quest_id": config.QuestID,
 		},
 	}
-	sendMessage(conn, msg)
+	sendMessage(conn, msg, config.Verbose)
 	testResults["status_request"] = true
 	fmt.Println("✅ Test 3: Status request sent")
 	
@@ -329,7 +334,7 @@ func runTests(conn *websocket.Conn, config Config) {
 			"content":  "Hello, this is a test message!",
 		},
 	}
-	sendMessage(conn, msg)
+	sendMessage(conn, msg, config.Verbose)
 	testResults["user_input"] = true
 	fmt.Println("✅ Test 4: User input sent")
 	

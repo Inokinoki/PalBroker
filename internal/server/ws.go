@@ -530,11 +530,18 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 
 		client.UpdateActivity()
 
+		// DEBUG: Log raw message
+		log.Printf("[DEBUG] Received raw message from %s: %s", client.DeviceID, string(message))
+
 		var msg ClientMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			s.errorCh <- fmt.Errorf("failed to parse message: %w", err)
+			log.Printf("[DEBUG] Failed to parse message: %v", err)
 			continue
 		}
+
+		// DEBUG: Log parsed message
+		log.Printf("[DEBUG] Parsed message - Type: %s, Data: %v", msg.Command, msg.Data)
 
 		// Handle command
 		s.handleCommand(msg, client)
@@ -604,29 +611,49 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 }
 
 func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClient) {
+	log.Printf("[DEBUG] handleCommand called with type: %s", msg.Command)
+	
 	switch msg.Command {
 	case "send_input":
+		log.Printf("[DEBUG] Processing send_input command")
 		// Send input to CLI
 		if s.cli != nil && s.cli.Stdin != nil {
 			if content, ok := msg.Data["content"].(string); ok {
+				log.Printf("[DEBUG] Sending input to CLI: %s", content)
 				if _, err := s.cli.Stdin.Write([]byte(content + "\n")); err != nil {
 					s.errorCh <- fmt.Errorf("failed to send input: %w", err)
+					log.Printf("[DEBUG] Failed to send input: %v", err)
+				} else {
+					log.Printf("[DEBUG] Input sent successfully to CLI")
 				}
+			} else {
+				log.Printf("[DEBUG] No content in message data: %v", msg.Data)
 			}
+		} else {
+			log.Printf("[DEBUG] CLI or Stdin is nil - CLI: %v, Stdin: %v", s.cli != nil, s.cli != nil && s.cli.Stdin != nil)
 		}
 
 	case "cancel":
+		log.Printf("[DEBUG] Processing cancel command")
 		// Cancel task
 		if s.cli != nil {
+			log.Printf("[DEBUG] Stopping CLI...")
 			if err := s.cli.Stop(); err != nil {
 				s.errorCh <- fmt.Errorf("failed to cancel task: %w", err)
+				log.Printf("[DEBUG] Failed to stop CLI: %v", err)
+			} else {
+				log.Printf("[DEBUG] CLI stopped successfully")
 			}
+		} else {
+			log.Printf("[DEBUG] CLI is nil, cannot cancel")
 		}
 
 	case "get_status":
+		log.Printf("[DEBUG] Processing get_status command")
 		// Get status
 		taskState, err := s.stateMgr.LoadState(s.taskID)
 		if err == nil && taskState != nil {
+			log.Printf("[DEBUG] Sending status response: %+v", taskState)
 			s.sendToClient(client.DeviceID, map[string]interface{}{
 				"type": "status",
 				"data": map[string]interface{}{
@@ -636,23 +663,38 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 					"created_at": taskState.CreatedAt,
 				},
 			})
+		} else {
+			log.Printf("[DEBUG] Failed to load state: %v", err)
 		}
 
 	case "approve":
+		log.Printf("[DEBUG] Processing approve command")
 		// Approve operation(for AI permission requests)
 		if s.cli != nil && s.cli.Stdin != nil {
+			log.Printf("[DEBUG] Sending approval to CLI")
 			if _, err := s.cli.Stdin.Write([]byte("y\n")); err != nil {
 				s.errorCh <- fmt.Errorf("failed to send approval: %w", err)
+				log.Printf("[DEBUG] Failed to send approval: %v", err)
 			}
+		} else {
+			log.Printf("[DEBUG] CLI or Stdin is nil")
 		}
 
 	case "reject":
+		log.Printf("[DEBUG] Processing reject command")
 		// Reject operation
 		if s.cli != nil && s.cli.Stdin != nil {
+			log.Printf("[DEBUG] Sending rejection to CLI")
 			if _, err := s.cli.Stdin.Write([]byte("n\n")); err != nil {
 				s.errorCh <- fmt.Errorf("failed to send rejection: %w", err)
+				log.Printf("[DEBUG] Failed to send rejection: %v", err)
 			}
+		} else {
+			log.Printf("[DEBUG] CLI or Stdin is nil")
 		}
+
+	default:
+		log.Printf("[DEBUG] Unknown command type: %s", msg.Command)
 	}
 }
 
