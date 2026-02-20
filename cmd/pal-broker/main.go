@@ -15,30 +15,38 @@ import (
 )
 
 var (
-	taskID     = flag.String("task", "", "task ID")
-	provider   = flag.String("provider", "claude", "CLI provider (claude, codex, copilot)")
+	taskID     = flag.String("task", "", "task ID (alias: --quest-id)")
+	questID    = flag.String("quest-id", "", "quest ID (alias: --task)")
+	provider   = flag.String("provider", "claude", "AI provider (claude, codex, copilot)")
 	workDir    = flag.String("work-dir", ".", "working directory")
-	sessionDir = flag.String("session-dir", "/tmp/pal-bridge", "session directory")
+	sessionDir = flag.String("session-dir", "/tmp/pal-broker", "session directory")
+	portFlag   = flag.String("port", ":0", "WebSocket port (default: random, e.g., :8765)")
 )
 
 func main() {
 	flag.Parse()
 
-	if *taskID == "" {
-		log.Fatal("task ID required (use --task)")
+	// 支持 --task 和 --quest-id 两种参数
+	id := *taskID
+	if id == "" {
+		id = *questID
+	}
+
+	if id == "" {
+		log.Fatal("task/quest ID required (use --task or --quest-id)")
 	}
 
 	// 创建会话目录
-	dir := filepath.Join(*sessionDir, *taskID)
+	dir := filepath.Join(*sessionDir, id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Fatalf("Failed to create session dir: %v", err)
+		log.Fatalf("Failed to create session directory %s: %v", dir, err)
 	}
 
-	log.Printf("Starting pal-bridge for task %s (provider: %s)", *taskID, *provider)
+	log.Printf("Starting pal-broker for quest %s (provider: %s)", id, *provider)
 
 	// 初始化状态管理器
 	stateMgr := state.NewManager(*sessionDir)
-	if err := stateMgr.CreateTask(*taskID, *provider); err != nil {
+	if err := stateMgr.CreateTask(id, *provider); err != nil {
 		log.Fatalf("Failed to create task state: %v", err)
 	}
 
@@ -54,27 +62,32 @@ func main() {
 	// 启动 CLI
 	cli, err := cliAdapter.Start()
 	if err != nil {
-		log.Fatalf("Failed to start CLI: %v", err)
+		log.Fatalf("Failed to start AI CLI: %v", err)
 	}
 
-	log.Printf("CLI started (PID: %d)", cli.Pid)
+	log.Printf("AI CLI started (PID: %d)", cli.Pid)
 
 	// 保存 CLI PID
 	cliPidFile := filepath.Join(dir, "cli.pid")
-	os.WriteFile(cliPidFile, []byte(fmt.Sprintf("%d", cli.Pid)), 0644)
+	if err := os.WriteFile(cliPidFile, []byte(fmt.Sprintf("%d", cli.Pid)), 0644); err != nil {
+		log.Printf("Warning: failed to write CLI PID file: %v", err)
+	}
 
 	// 启动 WebSocket 服务器
-	wsServer := server.NewWebSocketServer(stateMgr, *taskID, cli)
-	port, err := wsServer.Start(":0")
+	wsServer := server.NewWebSocketServer(stateMgr, id, cli)
+	port, err := wsServer.Start(*portFlag)
 	if err != nil {
-		log.Fatalf("Failed to start WebSocket server: %v", err)
+		log.Fatalf("Failed to start WebSocket server on %s: %v", *portFlag, err)
 	}
 
 	log.Printf("WebSocket server listening on port %d", port)
 
-	// 保存 WebSocket 端口
+	// 保存 WebSocket 端口到文件
 	portFile := filepath.Join(dir, "ws_port")
-	os.WriteFile(portFile, []byte(fmt.Sprintf("%d", port)), 0644)
+	if err := os.WriteFile(portFile, []byte(fmt.Sprintf("%d", port)), 0644); err != nil {
+		log.Fatalf("Failed to write port file %s: %v", portFile, err)
+	}
+	log.Printf("Port file written to: %s", portFile)
 
 	// 转发 CLI 输出到状态管理器
 	go wsServer.ForwardOutput(cli.Stdout, cli.Stderr)
@@ -88,11 +101,11 @@ func main() {
 
 	// 停止 CLI
 	if err := cli.Stop(); err != nil {
-		log.Printf("Warning: failed to stop CLI: %v", err)
+		log.Printf("Warning: failed to stop AI CLI: %v", err)
 	}
 
 	// 更新状态
-	stateMgr.UpdateStatus(*taskID, "stopped")
+	stateMgr.UpdateStatus(id, "stopped")
 
 	log.Println("Cleanup completed, exiting")
 	os.Exit(0)

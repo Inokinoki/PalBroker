@@ -352,7 +352,7 @@ func TestGenerateDeviceID(t *testing.T) {
 // TestHealthEndpoint 测试健康检查端点
 func TestHealthEndpoint(t *testing.T) {
 	t.Skip("Skipping: HTTP handler registration conflict in tests")
-	
+
 	stateMgr := state.NewManager("/tmp/test-health")
 	server := NewWebSocketServer(stateMgr, "test_task", nil)
 
