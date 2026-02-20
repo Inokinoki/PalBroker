@@ -614,6 +614,17 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 	log.Printf("[DEBUG] handleCommand called with type: %s", msg.Command)
 	
 	switch msg.Command {
+	case "heartbeat":
+		log.Printf("[DEBUG] Received heartbeat from %s", client.DeviceID)
+		// Heartbeat is already tracked by UpdateActivity in listen()
+		// Optionally send ack
+		s.sendToClient(client.DeviceID, map[string]interface{}{
+			"type": "heartbeat_ack",
+			"data": map[string]interface{}{
+				"timestamp": time.Now().UnixMilli(),
+			},
+		})
+
 	case "send_input":
 		log.Printf("[DEBUG] Processing send_input command")
 		// Send input to CLI
