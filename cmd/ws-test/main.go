@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,10 +18,11 @@ import (
 
 // Message - WebSocket message structure
 type Message struct {
-	Command string                 `json:"command"`
-	Data    map[string]interface{} `json:"data"`
-	Timestamp int64                `json:"timestamp"`
-	Seq       int64                `json:"seq,omitempty"`
+	Command   string                 `json:"command"`
+	Data      map[string]interface{} `json:"data"`
+	Timestamp int64                  `json:"timestamp"`
+	Seq       int64                  `json:"seq,omitempty"`
+	Type      string                 `json:"type,omitempty"`
 }
 
 // Config - CLI configuration
@@ -35,6 +37,20 @@ type Config struct {
 	Duration    int
 }
 
+// Output buffer for accumulating chunks
+type OutputBuffer struct {
+	mu       sync.Mutex
+	buffer   string
+	lastType string
+	shown    bool   // Track if icon already shown
+	timer    *time.Timer
+}
+
+var outputBuf = &OutputBuffer{}
+
+// flushAfter - 延迟 flush 时间（毫秒）
+const flushAfter = 50 * time.Millisecond
+
 func main() {
 	// Parse flags
 	url := flag.String("url", "ws://localhost:8765/ws", "WebSocket server URL")
@@ -42,7 +58,7 @@ func main() {
 	provider := flag.String("provider", "claude", "AI provider")
 	task := flag.String("task", "", "Task description")
 	interactive := flag.Bool("i", false, "Interactive mode")
-	verbose := flag.Bool("v", false, "Verbose output")
+	verbose := flag.Bool("v", false, "Verbose output (show raw messages)")
 	testMode := flag.Bool("test", false, "Test mode (run automated tests)")
 	duration := flag.Int("duration", 30, "Test duration in seconds (default: 30)")
 	flag.Parse()
@@ -58,12 +74,6 @@ func main() {
 		Duration:    *duration,
 	}
 
-	if config.Verbose {
-		log.Printf("Connecting to: %s", config.URL)
-		log.Printf("Quest ID: %s", config.QuestID)
-		log.Printf("Provider: %s", config.Provider)
-	}
-
 	// Connect to WebSocket
 	conn, _, err := websocket.DefaultDialer.Dial(config.URL, nil)
 	if err != nil {
@@ -71,21 +81,13 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Set pong handler to automatically respond to server pings
-	conn.SetPongHandler(func(string) error {
-		if config.Verbose {
-			log.Printf("🏓 Received ping, auto-responding with pong")
-		}
-		return nil
-	})
-
-	log.Printf("✅ Connected to %s", config.URL)
+	fmt.Printf("✅ Connected to %s (quest: %s)\n", config.URL, config.QuestID)
 
 	// Handle interrupts
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
-	// Send heartbeat every 5 seconds (server expects every 10s)
+	// Send heartbeat every 5 seconds
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -97,96 +99,75 @@ func main() {
 					"quest_id": config.QuestID,
 				},
 			}
-			sendMessage(conn, msg, config.Verbose)
+			if err := conn.WriteJSON(msg); err != nil && config.Verbose {
+				log.Printf("❌ Heartbeat failed: %v", err)
+			}
 		}
 	}()
 
-	// Read messages from server
+	// Read loop
 	go func() {
 		for {
-			// Set read deadline for pong timeout
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-			
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				if config.Verbose {
 					log.Printf("❌ Read error: %v", err)
 				}
 				return
 			}
 
-			// Always log raw message for debugging
-			log.Printf("📥 Raw received: %s", string(message))
-
-			// Pretty print JSON
-			var msg ServerMessage
-			if err := json.Unmarshal(message, &msg); err == nil {
+			// Parse message
+			var msg Message
+			if err := json.Unmarshal(message, &msg); err != nil {
 				if config.Verbose {
-					log.Printf("📥 Parsed: Type=%s, Data=%v", msg.Type, msg.Data)
+					fmt.Printf("📥 %s\n", string(message))
 				}
-				printMessage(msg)
-			} else {
-				fmt.Printf("📥 %s\n", string(message))
-			}
-		}
-	}()
-
-	// Send initial task
-	if config.Task != "" {
-		log.Printf("📤 Sending start_task command")
-		msg := Message{
-			Command:   "start_task",
-			Timestamp: time.Now().UnixMilli(),
-			Data: map[string]interface{}{
-				"quest_id": config.QuestID,
-				"provider": config.Provider,
-				"task":     config.Task,
-			},
-		}
-		sendMessage(conn, msg, config.Verbose)
-	}
-
-	// Test mode, Interactive mode, or simple wait
-	if config.TestMode {
-		runTests(conn, config)
-	} else if config.Interactive {
-		fmt.Println("📝 Interactive mode - type messages and press Enter")
-		fmt.Println("Commands:")
-		fmt.Println("  /status - Request status")
-		fmt.Println("  /quit   - Exit")
-		fmt.Println("")
-
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			fmt.Print("> ")
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				log.Printf("❌ Read error: %v", err)
-				return
-			}
-
-			input = strings.TrimSpace(input)
-
-			// Handle commands
-			if input == "/quit" || input == "/exit" {
-				fmt.Println("👋 Goodbye!")
-				return
-			}
-
-			if input == "/status" {
-				msg := Message{
-					Command:   "get_status",
-					Timestamp: time.Now().UnixMilli(),
-					Data: map[string]interface{}{
-						"quest_id": config.QuestID,
-					},
-				}
-				sendMessage(conn, msg, config.Verbose)
 				continue
 			}
 
-			// Send as input message
-			if input != "" {
+			// Handle message
+			handleMessage(msg, config.Verbose)
+		}
+	}()
+
+	// Send initial task if provided
+	if config.Task != "" {
+		fmt.Printf("📤 Sending: %s\n", config.Task)
+		msg := Message{
+			Command:   "send_input",
+			Timestamp: time.Now().UnixMilli(),
+			Data: map[string]interface{}{
+				"content": config.Task,
+			},
+		}
+		if err := conn.WriteJSON(msg); err != nil {
+			log.Printf("❌ Send failed: %v", err)
+		}
+	}
+
+	// Interactive mode or wait
+	if config.Interactive {
+		fmt.Printf("💬 Interactive mode (Ctrl+C to exit)\n")
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			select {
+			case <-interrupt:
+				flushBuffer()
+				fmt.Printf("\n👋 Disconnecting...\n")
+				return
+			default:
+				input, err := reader.ReadString('\n')
+				if err != nil {
+					continue
+				}
+				input = strings.TrimSpace(input)
+				if input == "" {
+					continue
+				}
+
+				flushBuffer()
+				fmt.Printf("📤 %s\n", input)
+
 				msg := Message{
 					Command:   "send_input",
 					Timestamp: time.Now().UnixMilli(),
@@ -194,182 +175,154 @@ func main() {
 						"content": input,
 					},
 				}
-				sendMessage(conn, msg, config.Verbose)
+				if err := conn.WriteJSON(msg); err != nil {
+					log.Printf("❌ Send failed: %v", err)
+					continue
+				}
 			}
 		}
 	} else {
-		// Simple mode: wait for duration or interrupt
 		fmt.Printf("⏳ Waiting for %d seconds (Ctrl+C to exit)...\n", config.Duration)
-		
-		done := make(chan bool)
-		go func() {
-			<-interrupt
-			done <- true
-		}()
-		
-		select {
-		case <-done:
-			fmt.Println("\n👋 Disconnecting...")
-		case <-time.After(time.Duration(config.Duration) * time.Second):
-			fmt.Printf("\n✅ Test duration completed (%d seconds)\n", config.Duration)
-		}
+		<-interrupt
+		flushBuffer()
+		fmt.Printf("\n👋 Disconnecting...\n")
 	}
 }
 
-func sendMessage(conn *websocket.Conn, msg Message, verbose bool) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("❌ Marshal error: %v", err)
-		return
-	}
-
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("❌ Send error: %v", err)
-		return
-	}
-
-	// Only log non-heartbeat messages or when verbose
-	if verbose || msg.Command != "heartbeat" {
-		log.Printf("📤 Sent: %s", msg.Command)
-	}
-}
-
-// ServerMessage - Server message structure (for receiving)
-type ServerMessage struct {
-	Type      string                 `json:"type"`
-	Data      map[string]interface{} `json:"data,omitempty"`
-	Timestamp int64                  `json:"timestamp"`
-	Seq       int64                  `json:"seq,omitempty"`
-}
-
-func printMessage(msg ServerMessage) {
+// handleMessage - Handle received messages (only show agent events)
+func handleMessage(msg Message, verbose bool) {
 	switch msg.Type {
-	case "connected":
-		fmt.Printf("🔗 Connected\n")
-		if msg.Data != nil {
-			if questID, ok := msg.Data["quest_id"].(string); ok {
-				fmt.Printf("   Quest: %s\n", questID)
-			}
-		}
-
 	case "status":
-		fmt.Printf("📊 Status Update\n")
-		if msg.Data != nil {
-			if state, ok := msg.Data["state"].(string); ok {
-				fmt.Printf("   State: %s\n", state)
-			}
-			if progress, ok := msg.Data["progress"].(float64); ok {
-				fmt.Printf("   Progress: %.0f%%\n", progress)
-			}
-		}
+		return
 
-	case "output":
-		fmt.Printf("💬 Output\n")
-		if msg.Data != nil {
-			if content, ok := msg.Data["content"].(string); ok {
-				fmt.Printf("   %s\n", content)
+	case "heartbeat_ack":
+		return
+
+	case "chunk":
+		// ACP message
+		if data, ok := msg.Data["jsonrpc"].(string); ok && data == "2.0" {
+			if method, ok := msg.Data["method"].(string); ok {
+				if method == "session/update" {
+					if params, ok := msg.Data["params"].(map[string]interface{}); ok {
+						if update, ok := params["update"].(map[string]interface{}); ok {
+							if updateType, ok := update["sessionUpdate"].(string); ok {
+								switch updateType {
+								case "agent_message_chunk":
+									if content, ok := update["content"].(map[string]interface{}); ok {
+										if text, ok := content["text"].(string); ok {
+											outputBuf.add(text, "message")
+										}
+									}
+								case "agent_thought_chunk":
+									if verbose {
+										if content, ok := update["content"].(map[string]interface{}); ok {
+											if text, ok := content["text"].(string); ok {
+												outputBuf.add(text, "thought")
+											}
+										}
+									}
+								case "available_commands_update", "usage_update":
+									// Skip
+								default:
+									if verbose {
+										fmt.Printf("📨 update: %s\n", updateType)
+									}
+								}
+							}
+						}
+					}
+				}
+			} else if _, ok := msg.Data["result"]; ok {
+				// End of response - flush buffer and reset
+				flushBuffer()
+				outputBuf.mu.Lock()
+				outputBuf.shown = false
+				outputBuf.lastType = ""
+				outputBuf.mu.Unlock()
+				fmt.Printf("\n")
+				if verbose {
+					fmt.Printf("✅ Complete\n")
+				}
 			}
 		}
 
 	case "error":
-		fmt.Printf("❌ Error\n")
-		if msg.Data != nil {
-			if message, ok := msg.Data["message"].(string); ok {
-				fmt.Printf("   %s\n", message)
-			}
+		if data, ok := msg.Data["message"].(string); ok {
+			flushBuffer()
+			fmt.Printf("❌ Error: %s\n", data)
 		}
-
-	case "task_complete":
-		fmt.Printf("✅ Task Complete\n")
-		if msg.Data != nil {
-			if result, ok := msg.Data["result"].(string); ok {
-				fmt.Printf("   Result: %s\n", result)
-			}
-		}
-
-	case "heartbeat_ack":
-		fmt.Printf("💓 Heartbeat ACK\n")
 
 	default:
-		fmt.Printf("📨 %s\n", msg.Type)
+		if verbose {
+			flushBuffer()
+			fmt.Printf("📨 %s: %v\n", msg.Type, msg.Data)
+		}
 	}
 }
 
-// runTests - Run automated WebSocket tests
-func runTests(conn *websocket.Conn, config Config) {
-	fmt.Println("🧪 Running WebSocket tests...")
-	fmt.Println("")
+// add text to buffer and schedule flush
+func (b *OutputBuffer) add(text, typ string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	
-	testResults := make(map[string]bool)
-	
-	// Test 1: Connection established
-	testResults["connection"] = true
-	fmt.Println("✅ Test 1: Connection established")
-	
-	// Test 2: Send heartbeat
-	time.Sleep(1 * time.Second)
-	msg := Message{
-		Command:   "heartbeat",
-		Timestamp: time.Now().UnixMilli(),
-		Data: map[string]interface{}{
-			"quest_id": config.QuestID,
-		},
-	}
-	sendMessage(conn, msg, config.Verbose)
-	testResults["heartbeat"] = true
-	fmt.Println("✅ Test 2: Heartbeat sent")
-	
-	// Test 3: Request status
-	time.Sleep(1 * time.Second)
-	msg = Message{
-		Command:   "get_status",
-		Timestamp: time.Now().UnixMilli(),
-		Data: map[string]interface{}{
-			"quest_id": config.QuestID,
-		},
-	}
-	sendMessage(conn, msg, config.Verbose)
-	testResults["status_request"] = true
-	fmt.Println("✅ Test 3: Status request sent")
-	
-	// Test 4: Send user input
-	time.Sleep(1 * time.Second)
-	msg = Message{
-		Command:   "send_input",
-		Timestamp: time.Now().UnixMilli(),
-		Data: map[string]interface{}{
-			"content": "Hello, this is a test message!",
-		},
-	}
-	sendMessage(conn, msg, config.Verbose)
-	testResults["user_input"] = true
-	fmt.Println("✅ Test 4: User input sent")
-	
-	// Test 5: Wait and monitor
-	fmt.Printf("⏳ Test 5: Monitoring for %d seconds...\n", config.Duration)
-	time.Sleep(time.Duration(config.Duration) * time.Second)
-	testResults["monitoring"] = true
-	fmt.Println("✅ Test 5: Monitoring completed")
-	
-	// Summary
-	fmt.Println("")
-	fmt.Println("==================================================")
-	fmt.Println("📊 Test Summary:")
-	fmt.Println("==================================================")
-	allPassed := true
-	for test, passed := range testResults {
-		status := "✅ PASS"
-		if !passed {
-			status = "❌ FAIL"
-			allPassed = false
+	// If type changed, flush previous buffer with newline
+	if b.lastType != "" && b.lastType != typ {
+		if b.buffer != "" {
+			b.doFlush()
 		}
-		fmt.Printf("%s: %s\n", status, test)
+		fmt.Printf("\n")
+		b.shown = false  // Reset for new type
 	}
-	fmt.Println("==================================================")
-	if allPassed {
-		fmt.Println("🎉 All tests passed!")
+	
+	// Append text
+	b.buffer += text
+	b.lastType = typ
+	
+	// Cancel existing timer
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	
+	// Schedule flush after delay
+	b.timer = time.AfterFunc(flushAfter, func() {
+		b.mu.Lock()
+		if b.buffer != "" {
+			b.doFlush()
+		}
+		b.mu.Unlock()
+	})
+}
+
+// flush buffer to output
+func flushBuffer() {
+	outputBuf.mu.Lock()
+	defer outputBuf.mu.Unlock()
+	if outputBuf.timer != nil {
+		outputBuf.timer.Stop()
+	}
+	outputBuf.doFlush()
+}
+
+func (b *OutputBuffer) doFlush() {
+	if b.buffer == "" {
+		return
+	}
+	
+	// Print icon only once at the start
+	if !b.shown {
+		if b.lastType == "message" {
+			fmt.Printf("🤖 %s", b.buffer)
+		} else if b.lastType == "thought" {
+			fmt.Printf("💭 %s", b.buffer)
+		}
+		b.shown = true
 	} else {
-		fmt.Println("⚠️  Some tests failed")
+		// Subsequent chunks - just print text
+		fmt.Printf("%s", b.buffer)
 	}
-	fmt.Println("")
+	
+	// Flush stdout immediately for streaming effect
+	fmt.Fprint(os.Stdout)
+	
+	b.buffer = ""
 }

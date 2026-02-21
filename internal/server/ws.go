@@ -715,15 +715,15 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 func (s *WebSocketServer) processInputQueue() {
 	log.Printf("[DEBUG] processInputQueue: starting")
 	
-	// Wait for first message (should be task)
+	// Wait for first message (should be task or input)
 	firstMsg, ok := <-s.inputQueue
 	if !ok {
 		log.Printf("[DEBUG] processInputQueue: queue closed before first message")
 		return
 	}
 	
-	// Start CLI with the task
-	log.Printf("[DEBUG] processInputQueue: starting CLI with task: %s", firstMsg.Content)
+	// Start CLI with the task/input
+	log.Printf("[DEBUG] processInputQueue: starting CLI with %s: %s", firstMsg.Type, firstMsg.Content)
 	
 	// Set task in adapter
 	s.cliAdapter.SetTask(firstMsg.Content)
@@ -840,6 +840,13 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 			if s.historyFile != nil {
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
 				fmt.Fprintf(s.historyFile, "[%s] [input] %s\n", timestamp, content)
+			}
+			
+			// If CLI not started yet, start it with this input as the task
+			if !s.cliStarted && s.cliAdapter != nil {
+				log.Printf("[DEBUG] handleCommand: CLI not started, starting with input as task")
+				s.cliStarted = true
+				go s.processInputQueue()
 			}
 			
 			// Add to queue (will be sent when CLI is ready)
