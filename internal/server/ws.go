@@ -283,6 +283,11 @@ func (s *WebSocketServer) checkHeartbeat() {
 
 	now := time.Now()
 	for deviceID, client := range s.clients {
+		// Skip already closed clients
+		if client.IsClosed() {
+			continue
+		}
+
 		client.mu.RLock()
 		lastActive := client.LastActive
 		client.mu.RUnlock()
@@ -290,6 +295,9 @@ func (s *WebSocketServer) checkHeartbeat() {
 		// Disconnect if no activity for 2x heartbeat interval
 		if now.Sub(lastActive) > 2*HeartbeatInterval {
 			log.Printf("Client %s heartbeat timeout, disconnecting", deviceID)
+			// Mark as closed first to stop ping goroutine
+			client.SetClosed()
+			// Then remove from map
 			s.removeClient(deviceID)
 		}
 	}
@@ -326,7 +334,6 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			if err != io.EOF {
 				s.errorCh <- fmt.Errorf("read error: %w", err)
 			}
-			log.Printf("[DEBUG] forwardStream: Read ended - n=%d, err=%v", n, err)
 			break
 		}
 
@@ -334,27 +341,19 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			continue
 		}
 
-		// DEBUG: Log received data
-		log.Printf("[DEBUG] forwardStream: Received %d bytes (%s): %s", n, eventType, string(buf[:n]))
-
 		lines := splitLines(buf[:n])
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
 
-			log.Printf("[DEBUG] forwardStream: Processing line: %s", string(line))
-
 			// Try to parse JSON
 			var data interface{}
 			if err := json.Unmarshal(line, &data); err != nil {
 				// Non-JSON, treat as text
-				log.Printf("[DEBUG] forwardStream: Non-JSON line, treating as text")
 				data = map[string]interface{}{
 					"content": string(line),
 				}
-			} else {
-				log.Printf("[DEBUG] forwardStream: JSON parsed successfully: %v", data)
 			}
 
 			// AddtoState manager
@@ -366,19 +365,14 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 
 			if err := s.stateMgr.AddOutput(s.taskID, event); err != nil {
 				s.errorCh <- fmt.Errorf("failed to add output: %w", err)
-				log.Printf("[DEBUG] forwardStream: Failed to add output: %v", err)
-			} else {
-				log.Printf("[DEBUG] forwardStream: Output added to state manager")
 			}
 
 			// Sendtobroadcast channel
 			select {
 			case s.broadcastCh <- event:
-				log.Printf("[DEBUG] forwardStream: Event broadcast successfully")
 			default:
 				// Channel full, log error
 				s.errorCh <- errors.New("broadcast channel full")
-				log.Printf("[DEBUG] forwardStream: Broadcast channel full")
 			}
 		}
 	}
@@ -436,7 +430,7 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 		s.errorCh <- fmt.Errorf("failed to add device: %w", err)
 	}
 
-	// Add client
+	// Add client (handles reconnection)
 	s.addClient(deviceID, client)
 
 	log.Printf("Device %s connected to task %s", deviceID, s.taskID)
@@ -456,11 +450,13 @@ func (s *WebSocketServer) addClient(deviceID string, client *WebSocketClient) {
 
 	// IfAlreadyhassame nameClient，firstCloseoldConnected
 	if oldClient, exists := s.clients[deviceID]; exists {
-		log.Printf("Replacing existing client: %s", deviceID)
+		log.Printf("Replacing existing client: %s (reconnect scenario)", deviceID)
+		// Mark old client as closed - this will stop its ping goroutine
 		oldClient.SetClosed()
 		if oldClient.Conn != nil {
 			oldClient.Conn.Close()
 		}
+		// Don't delete from map, just replace - allows seamless reconnection
 	}
 
 	s.clients[deviceID] = client
@@ -535,6 +531,10 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 				s.errorCh <- fmt.Errorf("WebSocket error: %w", err)
 			}
 
+			// Mark client as closed immediately to stop ping goroutine
+			client.SetClosed()
+			log.Printf("[DEBUG] listen: Client %s connection error, marking as closed: %v", client.DeviceID, err)
+
 			// TryReconnect
 			if s.config.ReconnectEnabled && client.GetReconnectCount() < MaxReconnectAttempts {
 				s.attemptReconnect(client)
@@ -544,18 +544,11 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 
 		client.UpdateActivity()
 
-		// DEBUG: Log raw message
-		log.Printf("[DEBUG] Received raw message from %s: %s", client.DeviceID, string(message))
-
 		var msg ClientMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			s.errorCh <- fmt.Errorf("failed to parse message: %w", err)
-			log.Printf("[DEBUG] Failed to parse message: %v", err)
 			continue
 		}
-
-		// DEBUG: Log parsed message
-		log.Printf("[DEBUG] Parsed message - Type: %s, Data: %v", msg.Command, msg.Data)
 
 		// Handle command
 		s.handleCommand(msg, client)
@@ -563,7 +556,7 @@ func (s *WebSocketServer) listen(client *WebSocketClient) {
 		// Update device sequence
 		lastSeq++
 		if err := s.stateMgr.UpdateDeviceSeq(s.taskID, client.DeviceID, lastSeq); err != nil {
-			s.errorCh <- fmt.Errorf("failed to update device seq: %w", err)
+			// Silently ignore sequence update errors
 		}
 	}
 }
@@ -585,7 +578,8 @@ func (s *WebSocketServer) sendPing(client *WebSocketClient) {
 
 			client.Conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
 			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				s.errorCh <- fmt.Errorf("failed to send ping: %w", err)
+				// Mark client as closed to stop further attempts
+				client.SetClosed()
 				return
 			}
 		}
@@ -596,6 +590,8 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 	count := client.GetReconnectCount()
 	if count >= MaxReconnectAttempts {
 		s.errorCh <- fmt.Errorf("%s: %s", client.DeviceID, ErrMaxAttemptsReached.Error())
+		log.Printf("[DEBUG] attemptReconnect: Max attempts reached for %s, removing client", client.DeviceID)
+		// Client will be removed by listen() goroutine
 		return
 	}
 
@@ -622,16 +618,16 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 	}); err != nil {
 		s.errorCh <- fmt.Errorf("failed to record reconnect: %w", err)
 	}
+
+	// Note: Client remains in s.clients map to allow reconnection
+	// New connection with same deviceID will reuse the client object
+	// listen() goroutine will exit, but ping goroutine should have already stopped
 }
 
 func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClient) {
-	log.Printf("[DEBUG] handleCommand called with type: %s", msg.Command)
-	
 	switch msg.Command {
 	case "heartbeat":
-		log.Printf("[DEBUG] Received heartbeat from %s", client.DeviceID)
-		// Heartbeat is already tracked by UpdateActivity in listen()
-		// Optionally send ack
+		// Don't log heartbeat to reduce noise
 		s.sendToClient(client.DeviceID, map[string]interface{}{
 			"type": "heartbeat_ack",
 			"data": map[string]interface{}{
@@ -640,64 +636,37 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 		})
 
 	case "start_task":
-		log.Printf("[DEBUG] Processing start_task command")
 		// Send task to CLI (if CLI accepts task via stdin)
 		if s.cli != nil && s.cli.Stdin != nil {
 			if task, ok := msg.Data["task"].(string); ok {
-				log.Printf("[DEBUG] Sending task to CLI: %s", task)
 				if _, err := s.cli.Stdin.Write([]byte(task + "\n")); err != nil {
 					s.errorCh <- fmt.Errorf("failed to send task: %w", err)
-					log.Printf("[DEBUG] Failed to send task: %v", err)
-				} else {
-					log.Printf("[DEBUG] Task sent successfully to CLI")
 				}
-			} else {
-				log.Printf("[DEBUG] No task in message data: %v", msg.Data)
 			}
-		} else {
-			log.Printf("[DEBUG] CLI or Stdin is nil")
 		}
 
 	case "send_input":
-		log.Printf("[DEBUG] Processing send_input command")
 		// Send input to CLI
 		if s.cli != nil && s.cli.Stdin != nil {
 			if content, ok := msg.Data["content"].(string); ok {
-				log.Printf("[DEBUG] Sending input to CLI: %s", content)
 				if _, err := s.cli.Stdin.Write([]byte(content + "\n")); err != nil {
 					s.errorCh <- fmt.Errorf("failed to send input: %w", err)
-					log.Printf("[DEBUG] Failed to send input: %v", err)
-				} else {
-					log.Printf("[DEBUG] Input sent successfully to CLI")
 				}
-			} else {
-				log.Printf("[DEBUG] No content in message data: %v", msg.Data)
 			}
-		} else {
-			log.Printf("[DEBUG] CLI or Stdin is nil - CLI: %v, Stdin: %v", s.cli != nil, s.cli != nil && s.cli.Stdin != nil)
 		}
 
 	case "cancel":
-		log.Printf("[DEBUG] Processing cancel command")
 		// Cancel task
 		if s.cli != nil {
-			log.Printf("[DEBUG] Stopping CLI...")
 			if err := s.cli.Stop(); err != nil {
 				s.errorCh <- fmt.Errorf("failed to cancel task: %w", err)
-				log.Printf("[DEBUG] Failed to stop CLI: %v", err)
-			} else {
-				log.Printf("[DEBUG] CLI stopped successfully")
 			}
-		} else {
-			log.Printf("[DEBUG] CLI is nil, cannot cancel")
 		}
 
 	case "get_status":
-		log.Printf("[DEBUG] Processing get_status command")
 		// Get status
 		taskState, err := s.stateMgr.LoadState(s.taskID)
 		if err == nil && taskState != nil {
-			log.Printf("[DEBUG] Sending status response: %+v", taskState)
 			s.sendToClient(client.DeviceID, map[string]interface{}{
 				"type": "status",
 				"data": map[string]interface{}{
@@ -707,38 +676,26 @@ func (s *WebSocketServer) handleCommand(msg ClientMessage, client *WebSocketClie
 					"created_at": taskState.CreatedAt,
 				},
 			})
-		} else {
-			log.Printf("[DEBUG] Failed to load state: %v", err)
 		}
 
 	case "approve":
-		log.Printf("[DEBUG] Processing approve command")
 		// Approve operation(for AI permission requests)
 		if s.cli != nil && s.cli.Stdin != nil {
-			log.Printf("[DEBUG] Sending approval to CLI")
 			if _, err := s.cli.Stdin.Write([]byte("y\n")); err != nil {
 				s.errorCh <- fmt.Errorf("failed to send approval: %w", err)
-				log.Printf("[DEBUG] Failed to send approval: %v", err)
 			}
-		} else {
-			log.Printf("[DEBUG] CLI or Stdin is nil")
 		}
 
 	case "reject":
-		log.Printf("[DEBUG] Processing reject command")
 		// Reject operation
 		if s.cli != nil && s.cli.Stdin != nil {
-			log.Printf("[DEBUG] Sending rejection to CLI")
 			if _, err := s.cli.Stdin.Write([]byte("n\n")); err != nil {
 				s.errorCh <- fmt.Errorf("failed to send rejection: %w", err)
-				log.Printf("[DEBUG] Failed to send rejection: %v", err)
 			}
-		} else {
-			log.Printf("[DEBUG] CLI or Stdin is nil")
 		}
 
 	default:
-		log.Printf("[DEBUG] Unknown command type: %s", msg.Command)
+		// Unknown command, ignore silently
 	}
 }
 
