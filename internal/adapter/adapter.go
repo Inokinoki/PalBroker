@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -187,6 +188,8 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	cmd := m.adapter.BuildCommand(m.config)
 	cmd.Dir = m.config.WorkDir
 
+	log.Printf("[DEBUG] Starting CLI command: %s %v", cmd.Path, cmd.Args)
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -205,6 +208,8 @@ func (m *Manager) Start() (*CLIProcess, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+
+	log.Printf("[DEBUG] CLI started with PID: %d", cmd.Process.Pid)
 
 	return &CLIProcess{
 		Cmd:    cmd,

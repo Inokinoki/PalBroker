@@ -338,21 +338,28 @@ func (s *WebSocketServer) ForwardOutput(stdout, stderr io.Reader) {
 	// Forward stdout
 	go func() {
 		defer s.wg.Done()
+		log.Printf("[DEBUG] ForwardOutput: starting stdout forwarder")
 		s.forwardStream(stdout, "chunk")
+		log.Printf("[DEBUG] ForwardOutput: stdout forwarder exited")
 	}()
 
 	// Forward stderr
 	go func() {
 		defer s.wg.Done()
+		log.Printf("[DEBUG] ForwardOutput: starting stderr forwarder")
 		s.forwardStream(stderr, "error")
+		log.Printf("[DEBUG] ForwardOutput: stderr forwarder exited")
 	}()
 }
 
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	buf := make([]byte, 4096)
+	log.Printf("[DEBUG] forwardStream: starting for %s", eventType)
+	
 	for {
 		select {
 		case <-s.ctx.Done():
+			log.Printf("[DEBUG] forwardStream: context done for %s", eventType)
 			return
 		default:
 		}
@@ -360,20 +367,27 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 		n, err := reader.Read(buf)
 		if err != nil {
 			if err != io.EOF {
+				log.Printf("forwardStream: read error: %v", err)
 				s.errorCh <- fmt.Errorf("read error: %w", err)
 			}
+			log.Printf("forwardStream: read ended, n=%d, err=%v", n, err)
 			break
 		}
 
 		if n == 0 {
+			log.Printf("[DEBUG] forwardStream: read 0 bytes from %s", eventType)
 			continue
 		}
+
+		log.Printf("forwardStream: received %d bytes from %s", n, eventType)
 
 		lines := splitLines(buf[:n])
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
+
+			log.Printf("forwardStream: processing line: %s", string(line))
 
 			// Save to history file if enabled
 			if s.historyFile != nil {
@@ -385,9 +399,12 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			var data interface{}
 			if err := json.Unmarshal(line, &data); err != nil {
 				// Non-JSON, treat as text
+				log.Printf("forwardStream: non-JSON line: %s", string(line))
 				data = map[string]interface{}{
 					"content": string(line),
 				}
+			} else {
+				log.Printf("forwardStream: JSON parsed: %v", data)
 			}
 
 			// AddtoState manager
@@ -398,14 +415,17 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			}
 
 			if err := s.stateMgr.AddOutput(s.taskID, event); err != nil {
+				log.Printf("forwardStream: failed to add output: %v", err)
 				s.errorCh <- fmt.Errorf("failed to add output: %w", err)
 			}
 
 			// Sendtobroadcast channel
 			select {
 			case s.broadcastCh <- event:
+				log.Printf("forwardStream: event broadcast")
 			default:
 				// Channel full, log error
+				log.Printf("forwardStream: broadcast channel full")
 				s.errorCh <- errors.New("broadcast channel full")
 			}
 		}
