@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"pal-broker/internal/session"
 	"pal-broker/internal/util"
 )
 
@@ -339,6 +341,10 @@ func (m *Manager) GetCapabilities() []string {
 // ClaudeAdapter - Claude Code adapter
 type ClaudeAdapter struct {
 	BaseAdapter
+	sessionDir     string              // Session directory for this task
+	sessionManager *session.Manager    // Session manager for persistence
+	sessionID      string              // Current session ID
+	sessionMu      sync.RWMutex        // Protects sessionID
 }
 
 func NewClaudeAdapter(config *CLIConfig) *ClaudeAdapter {
@@ -346,6 +352,18 @@ func NewClaudeAdapter(config *CLIConfig) *ClaudeAdapter {
 		BaseAdapter: BaseAdapter{
 			config: config,
 		},
+	}
+}
+
+// SetSessionDir - Set session directory for this adapter
+func (a *ClaudeAdapter) SetSessionDir(sessionDir, taskID string) {
+	a.sessionDir = sessionDir
+	a.sessionManager = session.NewManager(sessionDir, taskID, "claude")
+	
+	// Load existing session ID if available
+	if sessionID, err := a.sessionManager.Load(); err == nil && sessionID != "" {
+		a.sessionID = sessionID
+		util.DebugLog("[DEBUG] ClaudeAdapter: loaded existing session: %s", sessionID)
 	}
 }
 
@@ -357,6 +375,63 @@ func (a *ClaudeAdapter) SupportsACP() bool {
 func (a *ClaudeAdapter) SupportsJSONStream() bool {
 	// Claude Code supports --output-format stream-json
 	return true
+}
+
+// ExtractSessionID - Extract session ID from Claude output
+// Claude Code outputs session info in format: "Session ID: xxx" or in JSON
+var sessionIDRegex = regexp.MustCompile(`Session ID: ([a-f0-9-]+)`)
+
+func (a *ClaudeAdapter) ExtractSessionID(line string) string {
+	// Try regex match first
+	if matches := sessionIDRegex.FindStringSubmatch(line); len(matches) > 1 {
+		sessionID := matches[1]
+		util.DebugLog("[DEBUG] ClaudeAdapter: extracted session ID from output: %s", sessionID)
+		return sessionID
+	}
+
+	// Try JSON parsing
+	var msg map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &msg); err == nil {
+		// Check for session_id in various locations
+		if sid, ok := msg["session_id"].(string); ok && sid != "" {
+			return sid
+		}
+		if data, ok := msg["data"].(map[string]interface{}); ok {
+			if sid, ok := data["session_id"].(string); ok && sid != "" {
+				return sid
+			}
+			if sid, ok := data["sessionId"].(string); ok && sid != "" {
+				return sid
+			}
+		}
+		if sid, ok := msg["sessionId"].(string); ok && sid != "" {
+			return sid
+		}
+	}
+
+	return ""
+}
+
+// UpdateSessionID - Update session ID from output and save to file
+func (a *ClaudeAdapter) UpdateSessionID(line string) {
+	sessionID := a.ExtractSessionID(line)
+	if sessionID == "" {
+		return
+	}
+
+	a.sessionMu.Lock()
+	oldSessionID := a.sessionID
+	a.sessionID = sessionID
+	a.sessionMu.Unlock()
+
+	// Save to file if session ID changed
+	if sessionID != oldSessionID && a.sessionManager != nil {
+		if err := a.sessionManager.Save(sessionID); err != nil {
+			util.DebugLog("[DEBUG] ClaudeAdapter: failed to save session ID: %v", err)
+		} else {
+			util.DebugLog("[DEBUG] ClaudeAdapter: saved session ID: %s", sessionID)
+		}
+	}
 }
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
@@ -371,6 +446,16 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 	// File parameters
 	for _, file := range config.Files {
 		args = append(args, "--add-dir", file)
+	}
+
+	// Resume session if we have a session ID
+	a.sessionMu.RLock()
+	sessionID := a.sessionID
+	a.sessionMu.RUnlock()
+
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+		util.DebugLog("[DEBUG] ClaudeAdapter: resuming session %s", sessionID)
 	}
 
 	// Note: In interactive mode, task is sent via stdin
@@ -881,4 +966,9 @@ func (m *Manager) GetProvider() string {
 		return m.config.Provider
 	}
 	return "unknown"
+}
+
+// GetAdapter Get the underlying adapter (for type-specific operations)
+func (m *Manager) GetAdapter() Adapter {
+	return m.adapter
 }

@@ -565,6 +565,7 @@ var historyWriterPool = sync.Pool{
 // Optimization 2026-02-24 03:44: Added line length check before byte access (prevents panic on malformed input)
 // Optimization 2026-02-24 05:44: Removed redundant debug logs in hot path (zero overhead)
 // Optimization 2026-02-24 15:04: Eliminated string(line) allocation in plain text path by using unsafe conversion
+// Enhancement 2026-02-24: Extract and save Claude session ID from output
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	scanner := bufio.NewScanner(reader)
 	const maxCapacity = 1024 * 1024
@@ -579,6 +580,10 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	stateMgr := s.stateMgr
 	broadcastCh := s.broadcastCh
 	taskID := s.taskID
+	provider := ""
+	if s.cliAdapter != nil {
+		provider = s.cliAdapter.GetProvider()
+	}
 
 	// Initialize history writer only if needed
 	var histWriter *bufio.Writer
@@ -616,6 +621,16 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 		}
 
 		now := time.Now()
+
+		// Extract Claude session ID from output (if using Claude)
+		if provider == "claude" && eventType == "chunk" {
+			type sessionUpdater interface {
+				UpdateSessionID(line string)
+			}
+			if adapter, ok := s.cliAdapter.GetAdapter().(sessionUpdater); ok {
+				adapter.UpdateSessionID(string(line))
+			}
+		}
 
 		// Write to history file (batched for performance)
 		if enableHistory && histWriter != nil {
@@ -1051,6 +1066,19 @@ func (s *WebSocketServer) attemptReconnect(client *WebSocketClient) {
 func (s *WebSocketServer) startCLI(taskContent string) error {
 	// Set task in adapter
 	s.cliAdapter.SetTask(taskContent)
+
+	// Initialize Claude session manager if using Claude provider
+	// This must be called before starting CLI to enable session resume
+	if s.cliAdapter.GetProvider() == "claude" {
+		// Type assertion to access ClaudeAdapter-specific methods
+		type sessionInitializer interface {
+			SetSessionDir(sessionDir, taskID string)
+		}
+		if initializer, ok := s.cliAdapter.GetAdapter().(sessionInitializer); ok {
+			initializer.SetSessionDir(s.sessionDir, s.taskID)
+			util.DebugLog("[DEBUG] startCLI: initialized Claude session manager for task %s", s.taskID)
+		}
+	}
 
 	// Start CLI (for ACP mode, this starts the process and initializes)
 	cli, err := s.cliAdapter.Start()
