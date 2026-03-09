@@ -242,7 +242,7 @@ func TestGemini_3TurnConversation(t *testing.T) {
 func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	skipIfNoCLI(t, "copilot")
 
-	if !hasAPIKey(t, "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN") {
+	if !hasAPIKey(t, "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN") {
 		t.Skip("Skipping: No GitHub Copilot token found")
 	}
 

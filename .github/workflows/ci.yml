@@ -193,8 +193,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -219,8 +219,8 @@ jobs:
           [ -n "$GEMINI_API_KEY" ] && echo "✓ GEMINI_API_KEY" || echo "✗ GEMINI_API_KEY"
           [ -n "$GOOGLE_API_KEY" ] && echo "✓ GOOGLE_API_KEY" || echo "✗ GOOGLE_API_KEY"
           [ -n "$GITHUB_TOKEN" ] && echo "✓ GITHUB_TOKEN" || echo "✗ GITHUB_TOKEN"
-          [ -n "$GITHUB_COPILOT_TOKEN" ] && echo "✓ GITHUB_COPILOT_TOKEN" || echo "✗ GITHUB_COPILOT_TOKEN"
-          [ -n "$CODEX_API_KEY" ] && echo "✓ CODEX_API_KEY" || echo "✗ CODEX_API_KEY"
+          [ -n "$COPILOT_GITHUB_TOKEN" ] && echo "✓ COPILOT_GITHUB_TOKEN" || echo "✗ COPILOT_GITHUB_TOKEN"
+          [ -n "$OPENAI_API_KEY" ] && echo "✓ OPENAI_API_KEY" || echo "✗ OPENAI_API_KEY"
           echo ""
           go test -tags=integration -v ./tests/integration/...
 

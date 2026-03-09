@@ -54,8 +54,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       # Test configuration
       PAL_PROVIDER: claude
@@ -101,19 +101,37 @@ jobs:
 
           echo "Mock CLIs created and added to PATH"
 
+      - name: Verify Claude API key
+        id: verify-claude
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_API_KEY" ]; then
+            echo "❌ ERROR: Claude API key not configured"
+            echo "Please add ANTHROPIC_API_KEY or CLAUDE_API_KEY to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Claude API key configured"
+
       - name: Test with Claude
-        if: ${{ env.ANTHROPIC_API_KEY != '' || env.CLAUDE_API_KEY != '' }}
+        needs: verify-claude
         run: |
           echo "Testing Claude Code integration..."
-          go test -tags=integration -run TestClaude -v ./tests/integration/... || echo "Some Claude tests skipped (expected in CI)"
-        continue-on-error: true
+          go test -tags=integration -run TestClaude -v ./tests/integration/...
+
+      - name: Verify Codex API key
+        id: verify-codex
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "❌ ERROR: Codex API key not configured"
+            echo "Please add OPENAI_API_KEY to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Codex API key configured"
 
       - name: Test with Codex
-        if: ${{ env.CODEX_API_KEY != '' }}
+        needs: verify-codex
         run: |
           echo "Testing Codex integration..."
-          go test -tags=integration -run TestCodex -v ./tests/integration/... || echo "Some Codex tests skipped (expected in CI)"
-        continue-on-error: true
+          go test -tags=integration -run TestCodex -v ./tests/integration/...
 
       - name: Test with Gemini
         if: ${{ env.GEMINI_API_KEY != '' || env.GOOGLE_API_KEY != '' }}
@@ -122,12 +140,21 @@ jobs:
           go test -tags=integration -run TestGemini -v ./tests/integration/... || echo "Some Gemini tests skipped (expected in CI)"
         continue-on-error: true
 
+      - name: Verify Copilot API key
+        id: verify-copilot
+        run: |
+          if [ -z "$GITHUB_TOKEN" ] && [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "❌ ERROR: GitHub/Copilot API key not configured"
+            echo "Please add GITHUB_TOKEN or COPILOT_GITHUB_TOKEN to integration-tests environment"
+            exit 1
+          fi
+          echo "✅ Copilot API key configured"
+
       - name: Test with Copilot
-        if: ${{ env.GITHUB_TOKEN != '' || env.GITHUB_COPILOT_TOKEN != '' }}
+        needs: verify-copilot
         run: |
           echo "Testing Copilot integration..."
-          go test -tags=integration -run TestCopilot -v ./tests/integration/... || echo "Some Copilot tests skipped (expected in CI)"
-        continue-on-error: true
+          go test -tags=integration -run TestCopilot -v ./tests/integration/...
 
       - name: Upload integration test results
         if: always()
@@ -162,6 +189,12 @@ jobs:
             echo "✅ Integration tests passed!" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Integration tests failed or skipped" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔑 Required API Keys" >> $GITHUB_STEP_SUMMARY
+            echo "- **Claude**: ANTHROPIC_API_KEY or CLAUDE_API_KEY ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Codex**: OPENAI_API_KEY ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Copilot**: GITHUB_TOKEN or COPILOT_GITHUB_TOKEN ❌ Required" >> $GITHUB_STEP_SUMMARY
+            echo "- **Gemini**: GEMINI_API_KEY or GOOGLE_API_KEY ⚠️ Optional" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
