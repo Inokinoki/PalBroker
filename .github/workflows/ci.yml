@@ -213,46 +213,56 @@ jobs:
       - name: Install Claude Code CLI
         run: |
           echo "Installing Claude Code CLI..."
-          curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
-          claude --version || echo "Claude CLI installed"
+          curl -fsSL https://claude.ai/install.sh | sh || echo "Claude CLI installation failed, continuing..."
+          export PATH="$HOME/.local/bin:$PATH"
+          claude --version || echo "Claude CLI not found in PATH"
 
-      - name: Install OpenAI CLI (for Codex)
+      - name: Install Codex CLI
         run: |
-          echo "Installing OpenAI CLI..."
-          npm install -g @openai/openai-cli || echo "OpenAI CLI installation failed, continuing..."
-          # Create symlink for codex command compatibility
-          if command -v openai &> /dev/null; then
-            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
-          fi
-          openai --version || echo "openai CLI installed"
+          echo "Installing Codex CLI..."
+          # Clone and build codex-cli from GitHub
+          git clone https://github.com/openai/codex-cli /tmp/codex-cli || echo "Codex CLI clone failed, continuing..."
+          cd /tmp/codex-cli && go build -o codex && sudo mv codex /usr/local/bin/ || echo "Codex CLI build failed"
+          codex --version || echo "Codex CLI not found"
+
+      - name: Install Gemini CLI
+        run: |
+          echo "Installing Gemini CLI..."
+          npm install -g @google/generative-ai-cli || echo "Gemini CLI installation failed, continuing..."
+          gemini --version || echo "Gemini CLI not found"
 
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          npm install -g @github-copilot-cli/cli || echo "Copilot CLI installation failed, continuing..."
-          copilot --version || echo "copilot CLI installed"
-
-      - name: Install Google Gemini CLI
-        run: |
-          echo "Installing Gemini CLI..."
-          npm install -g gemini-cli || echo "Gemini CLI installation failed, continuing..."
-          gemini --version || echo "gemini CLI installed"
+          npm install -g @github/copilot-cli || echo "Copilot CLI installation failed, continuing..."
+          copilot --version || echo "Copilot CLI not found"
 
       - name: Install OpenCode CLI
         run: |
           echo "Installing OpenCode CLI..."
-          npm install -g opencode-cli || echo "OpenCode CLI installation failed, continuing..."
-          opencode --version || echo "opencode CLI installed"
+          # Clone and build opencode from GitHub
+          git clone https://github.com/opencode/opencode /tmp/opencode || echo "OpenCode clone failed, continuing..."
+          cd /tmp/opencode && go build -o opencode && sudo mv opencode /usr/local/bin/ || echo "OpenCode build failed"
+          opencode --version || echo "OpenCode not found"
 
       - name: Verify CLI installations
         run: |
           echo "Verifying CLI installations..."
+          export PATH="$HOME/.local/bin:$PATH"
           echo "Claude CLI: $(which claude || echo 'not found')"
           echo "Codex CLI: $(which codex || echo 'not found')"
-          echo "OpenAI CLI: $(which openai || echo 'not found')"
           echo "Copilot CLI: $(which copilot || echo 'not found')"
           echo "Gemini CLI: $(which gemini || echo 'not found')"
           echo "OpenCode CLI: $(which opencode || echo 'not found')"
+
+          # Test basic functionality
+          echo ""
+          echo "Testing CLI availability..."
+          command -v claude && echo "✓ claude available" || echo "✗ claude not available"
+          command -v codex && echo "✓ codex available" || echo "✗ codex not available"
+          command -v copilot && echo "✓ copilot available" || echo "✗ copilot not available"
+          command -v gemini && echo "✓ gemini available" || echo "✗ gemini not available"
+          command -v opencode && echo "✓ opencode available" || echo "✗ opencode not available"
 
       - name: Run integration tests
         run: |
