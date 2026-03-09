@@ -113,10 +113,10 @@ jobs:
 
   # 集成测试（使用 Makefile）
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (Secure)
     runs-on: ubuntu-latest
-    # Only run if at least one API key is available
-    if: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_API_KEY != '' || secrets.GEMINI_API_KEY != '' || secrets.GOOGLE_API_KEY != '' || secrets.GITHUB_TOKEN != '' }}
+    # Use protected environment for security
+    environment: integration-tests
     env:
       # API Keys from GitHub Secrets (only available if configured)
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
