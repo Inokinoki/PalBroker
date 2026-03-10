@@ -362,7 +362,7 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	sessionID := extractSessionID(sessionResp)
 	t.Logf("Testing prompt sending with session ID: %s", sessionID)
 
-	// Turn 1: Send first prompt (don't wait for response - Copilot ACP may not respond without file context)
+	// Turn 1: Send first prompt
 	sendACPRequest(t, stdin, 3, "session/prompt", map[string]interface{}{
 		"sessionId": sessionID,
 		"prompt": []map[string]string{
@@ -371,12 +371,12 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 	t.Log("Turn 1: Prompt sent successfully")
 
-	// Try to read any response with short timeout (Copilot might not respond)
-	resp1 := readACPMessages(t, stdout, 10*time.Second)
+	// Try to drain any immediate response with very short timeout
+	resp1 := readACPMessages(t, stdout, 2*time.Second)
 	if len(resp1) > 0 {
-		t.Logf("Turn 1 received %d messages (unexpected but OK)", len(resp1))
+		t.Logf("Turn 1 received %d messages", len(resp1))
 	} else {
-		t.Log("Turn 1: No response (expected - Copilot ACP may need file context)")
+		t.Log("Turn 1: No immediate response (expected)")
 	}
 
 	// Turn 2: Send second prompt
@@ -388,11 +388,11 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 	t.Log("Turn 2: Prompt sent successfully")
 
-	resp2 := readACPMessages(t, stdout, 10*time.Second)
+	resp2 := readACPMessages(t, stdout, 2*time.Second)
 	if len(resp2) > 0 {
 		t.Logf("Turn 2 received %d messages", len(resp2))
 	} else {
-		t.Log("Turn 2: No response (expected)")
+		t.Log("Turn 2: No immediate response")
 	}
 
 	// Turn 3: Send third prompt
@@ -404,11 +404,11 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 	t.Log("Turn 3: Prompt sent successfully")
 
-	resp3 := readACPMessages(t, stdout, 10*time.Second)
+	resp3 := readACPMessages(t, stdout, 2*time.Second)
 	if len(resp3) > 0 {
 		t.Logf("Turn 3 received %d messages", len(resp3))
 	} else {
-		t.Log("Turn 3: No response (expected)")
+		t.Log("Turn 3: No immediate response")
 	}
 
 	// Success if we could send all prompts without timeout
@@ -550,26 +550,36 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
 
-	deadline := time.After(timeout)
-
-	for {
-		select {
-		case <-time.After(100 * time.Millisecond):
-			if scanner.Scan() {
-				line := scanner.Text()
-				if line != "" {
-					messages = append(messages, line)
-				}
-			} else {
-				if err := scanner.Err(); err != nil {
-					t.Logf("Scanner error reading messages: %v", err)
-				}
-				return messages
-			}
-		case <-deadline:
-			return messages
-		}
+	// Use a channel to make reading non-blocking
+	type scanResult struct {
+		text string
+		err  error
 	}
+	resultChan := make(chan scanResult, 1)
+
+	// Start scanning in a goroutine
+	go func() {
+		if scanner.Scan() {
+			resultChan <- scanResult{text: scanner.Text(), err: nil}
+		} else {
+			resultChan <- scanResult{text: "", err: scanner.Err()}
+		}
+	}()
+
+	// Wait for either a result or timeout
+	select {
+	case result := <-resultChan:
+		if result.err != nil {
+			t.Logf("Scanner error reading messages: %v", result.err)
+		}
+		if result.text != "" {
+			messages = append(messages, result.text)
+		}
+	case <-time.After(timeout):
+		t.Logf("Timeout reached while waiting for messages (%v)", timeout)
+	}
+
+	return messages
 }
 
 func extractSessionID(resp string) string {
