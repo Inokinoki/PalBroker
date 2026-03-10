@@ -76,7 +76,7 @@ func TestCodex_Integration(t *testing.T) {
 	// First, try to get Codex version to verify it's working
 	versionCmd := exec.Command("codex", "--version")
 	versionCmd.Env = os.Environ()
-	versionOutput, versionErr := versionCmd.CombinedOutput()
+	versionOutput, _ := versionCmd.CombinedOutput()
 
 	t.Logf("Codex version check: %s", string(versionOutput))
 
@@ -114,7 +114,7 @@ func TestCopilot_Integration(t *testing.T) {
 	// First, try to get Copilot version to verify it's working
 	versionCmd := exec.Command("copilot", "--version")
 	versionCmd.Env = os.Environ()
-	versionOutput, versionErr := versionCmd.CombinedOutput()
+	versionOutput, _ := versionCmd.CombinedOutput()
 
 	t.Logf("Copilot version check: %s", string(versionOutput))
 
