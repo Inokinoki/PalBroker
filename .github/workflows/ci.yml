@@ -183,7 +183,7 @@ jobs:
 
   # 集成测试（使用 Makefile）
   integration-tests:
-    name: Integration Tests (Secure)
+    name: Integration Tests
     runs-on: ubuntu-latest
     # Use protected environment for security
     environment: integration-tests
