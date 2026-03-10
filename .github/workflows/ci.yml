@@ -230,7 +230,7 @@ jobs:
       - name: Install Gemini CLI
         run: |
           echo "Installing Gemini CLI..."
-          npm install -g @google-cloud/generative-ai-cli || echo "Gemini CLI installation failed"
+          npm install -g @google/gemini-cli || echo "Gemini CLI installation failed"
 
       - name: Verify CLI installations
         run: |
