@@ -336,7 +336,12 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 	})
 
 	// Read initialize response
-	readACPResponse(t, stdout, 2*time.Second)
+	initResp := readACPResponse(t, stdout, 5*time.Second)
+	if len(initResp) > 0 {
+		t.Logf("Initialize response received (length: %d)", len(initResp))
+	} else {
+		t.Log("No initialize response received (may be okay)")
+	}
 
 	// Create session
 	sendACPRequest(t, stdin, 2, "session/new", map[string]interface{}{
@@ -344,8 +349,17 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		"mcpServers": []interface{}{},
 	})
 
-	sessionResp := readACPResponse(t, stdout, 2*time.Second)
-	t.Logf("Session response: %s", sessionResp)
+	sessionResp := readACPResponse(t, stdout, 5*time.Second)
+	t.Logf("Session response length: %d", len(sessionResp))
+	if len(sessionResp) > 0 {
+		t.Logf("Session response (first 500 chars): %s", sessionResp[:min(500, len(sessionResp))])
+	} else {
+		t.Error("Failed to read session response")
+		return
+	}
+
+	// Give Copilot a moment to be ready
+	time.Sleep(500 * time.Millisecond)
 
 	// Turn 1: First prompt
 	sendACPRequest(t, stdin, 3, "session/prompt", map[string]interface{}{
@@ -355,8 +369,14 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp1 := readACPMessages(t, stdout, 5*time.Second)
+	resp1 := readACPMessages(t, stdout, 10*time.Second)
 	t.Logf("Turn 1 received %d messages", len(resp1))
+	if len(resp1) > 0 {
+		t.Logf("Turn 1 first message (first 200 chars): %s", resp1[0][:min(200, len(resp1[0]))])
+	}
+
+	// Give Copilot a moment to be ready
+	time.Sleep(500 * time.Millisecond)
 
 	// Turn 2: Follow-up prompt
 	sendACPRequest(t, stdin, 4, "session/prompt", map[string]interface{}{
@@ -366,8 +386,14 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp2 := readACPMessages(t, stdout, 5*time.Second)
+	resp2 := readACPMessages(t, stdout, 10*time.Second)
 	t.Logf("Turn 2 received %d messages", len(resp2))
+	if len(resp2) > 0 {
+		t.Logf("Turn 2 first message (first 200 chars): %s", resp2[0][:min(200, len(resp2[0]))])
+	}
+
+	// Give Copilot a moment to be ready
+	time.Sleep(500 * time.Millisecond)
 
 	// Turn 3: Another follow-up
 	sendACPRequest(t, stdin, 5, "session/prompt", map[string]interface{}{
@@ -377,8 +403,11 @@ func TestCopilot_ACP_3TurnConversation(t *testing.T) {
 		},
 	})
 
-	resp3 := readACPMessages(t, stdout, 5*time.Second)
+	resp3 := readACPMessages(t, stdout, 10*time.Second)
 	t.Logf("Turn 3 received %d messages", len(resp3))
+	if len(resp3) > 0 {
+		t.Logf("Turn 3 first message (first 200 chars): %s", resp3[0][:min(200, len(resp3[0]))])
+	}
 
 	// Verify we got responses
 	if len(resp1) == 0 && len(resp2) == 0 && len(resp3) == 0 {
@@ -445,6 +474,13 @@ func TestPalBroker_3TurnConversation(t *testing.T) {
 
 // Helper functions
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func collectResponses(ch chan string, timeout time.Duration) []string {
 	var responses []string
 	deadline := time.After(timeout)
@@ -483,7 +519,12 @@ func sendACPRequest(t *testing.T, stdin io.WriteCloser, id int, method string, p
 }
 
 func readACPResponse(t *testing.T, stdout io.ReadCloser, timeout time.Duration) string {
+	// Increase buffer size for large JSON responses
 	scanner := bufio.NewScanner(stdout)
+	const maxCapacity = 1024 * 1024 // 1MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	deadline := time.After(timeout)
 
 	for {
@@ -491,6 +532,10 @@ func readACPResponse(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 		case <-time.After(100 * time.Millisecond):
 			if scanner.Scan() {
 				return scanner.Text()
+			}
+			if err := scanner.Err(); err != nil {
+				t.Logf("Scanner error: %v", err)
+				return ""
 			}
 		case <-deadline:
 			return ""
@@ -500,7 +545,13 @@ func readACPResponse(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 
 func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) []string {
 	var messages []string
+
+	// Increase buffer size for large JSON responses
 	scanner := bufio.NewScanner(stdout)
+	const maxCapacity = 1024 * 1024 // 1MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	deadline := time.After(timeout)
 
 	for {
@@ -512,6 +563,9 @@ func readACPMessages(t *testing.T, stdout io.ReadCloser, timeout time.Duration) 
 					messages = append(messages, line)
 				}
 			} else {
+				if err := scanner.Err(); err != nil {
+					t.Logf("Scanner error reading messages: %v", err)
+				}
 				return messages
 			}
 		case <-deadline:
@@ -525,8 +579,11 @@ func extractSessionID(resp string) string {
 	if strings.Contains(resp, "sessionId") {
 		parts := strings.Split(resp, "\"")
 		for i, part := range parts {
-			if part == "sessionId" && i+1 < len(parts) {
-				return parts[i+2]
+			if part == "sessionId" && i+2 < len(parts) {
+				sessionID := parts[i+2]
+				if len(sessionID) > 0 {
+					return sessionID
+				}
 			}
 		}
 	}
