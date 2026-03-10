@@ -225,7 +225,7 @@ jobs:
       - name: Install GitHub Copilot CLI
         run: |
           echo "Installing GitHub Copilot CLI..."
-          npm install -g github-copilot-cli || echo "Copilot CLI installation failed"
+          npm install -g @github/copilot
 
       - name: Install Gemini CLI
         run: |

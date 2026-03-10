@@ -21,9 +21,13 @@ import (
 	"time"
 )
 
-// skipIfNoCLI skipIfNoCLI - Skip test if CLI not installed
+// skipIfNoCLI skipIfNoCLI - Skip test if CLI not installed, but fail in CI
 func skipIfNoCLI(t *testing.T, cliName string) {
 	if _, err := exec.LookPath(cliName); err != nil {
+		// In CI, fail if CLI is not installed (it should have been installed in workflow)
+		if os.Getenv("CI") != "" {
+			t.Fatalf("CLI '%s' not found in CI environment - installation may have failed. Error: %v", cliName, err)
+		}
 		t.Skipf("Skipping: %s not installed", cliName)
 	}
 }
