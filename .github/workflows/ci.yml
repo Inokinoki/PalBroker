@@ -267,8 +267,19 @@ jobs:
         if: env.OPENAI_API_KEY != ''
         run: |
           echo "Configuring Codex CLI..."
-          # Codex reads OPENAI_API_KEY from environment automatically
-          echo "Codex will use OPENAI_API_KEY from environment"
+          # Set up Codex with OpenAI API key
+          export OPENAI_API_KEY="$OPENAI_API_KEY"
+          # Test basic Codex command to verify configuration
+          codex --version || echo "Codex version check failed"
+
+      - name: Configure Copilot CLI
+        if: env.GITHUB_TOKEN != ''
+        run: |
+          echo "Configuring Copilot CLI..."
+          # Copilot reads GITHUB_TOKEN from environment automatically
+          export GITHUB_TOKEN="$GITHUB_TOKEN"
+          # Test basic Copilot command to verify configuration
+          copilot --version || echo "Copilot version check failed"
 
       - name: Configure Copilot CLI
         if: env.GITHUB_TOKEN != ''
