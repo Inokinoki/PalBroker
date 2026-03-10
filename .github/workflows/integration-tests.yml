@@ -166,6 +166,7 @@ jobs:
         if: success()
         run: |
           echo "Testing Claude Code integration..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           go test -tags=integration -run TestClaude -v ./tests/integration/...
 
       - name: Verify Codex API key
@@ -182,12 +183,14 @@ jobs:
         if: success()
         run: |
           echo "Testing Codex integration..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           go test -tags=integration -run TestCodex -v ./tests/integration/...
 
       - name: Test with Gemini
         if: ${{ env.GEMINI_API_KEY != '' || env.GOOGLE_API_KEY != '' }}
         run: |
           echo "Testing Gemini integration..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           go test -tags=integration -run TestGemini -v ./tests/integration/... || echo "Some Gemini tests skipped (expected in CI)"
         continue-on-error: true
 
@@ -205,6 +208,7 @@ jobs:
         if: success()
         run: |
           echo "Testing Copilot integration..."
+          export PATH="$(npm prefix -g)/bin:$PATH"
           go test -tags=integration -run TestCopilot -v ./tests/integration/...
 
       - name: Upload integration test results
