@@ -214,7 +214,9 @@ jobs:
       - name: Install Codex CLI
         run: |
           echo "Installing Codex CLI..."
-          npm install -g @openai/codex || echo "Codex CLI installation failed"
+          npm install -g @openai/codex
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          codex --version || echo "Codex CLI installed"
 
       - name: Install Claude Code CLI
         run: |
@@ -276,7 +278,7 @@ jobs:
         if: env.OPENAI_API_KEY != ''
         run: |
           echo "Configuring Codex CLI..."
-          # Set up Codex with OpenAI API key
+          # Codex reads OPENAI_API_KEY from environment automatically
           export OPENAI_API_KEY="$OPENAI_API_KEY"
           # Test basic Codex command to verify configuration
           codex --version || echo "Codex version check failed"
