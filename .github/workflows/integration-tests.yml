@@ -82,18 +82,12 @@ jobs:
           curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
           claude --version || echo "Claude CLI installed"
 
-      - name: Install OpenAI CLI (for Codex)
+      - name: Install Codex CLI
         run: |
-          echo "Installing OpenAI CLI..."
-          npm install -g @openai/openai-cli
+          echo "Installing Codex CLI..."
+          npm install -g @openai/codex
           export PATH="$(npm prefix -g)/bin:$PATH"
-
-          # Create symlink for codex command compatibility
-          if command -v openai &> /dev/null; then
-            sudo ln -sf $(which openai) /usr/local/bin/codex || echo "Could not create codex symlink"
-          fi
-
-          openai --version || echo "openai CLI installed"
+          codex --version || echo "Codex CLI installed"
 
       - name: Install GitHub Copilot CLI
         run: |
@@ -126,10 +120,8 @@ jobs:
           export PATH="$(npm prefix -g)/bin:$PATH"
           echo "Claude CLI:"
           which claude || echo "claude not found"
-          echo "Codex CLI (or symlink):"
+          echo "Codex CLI:"
           which codex || echo "codex not found"
-          echo "OpenAI CLI:"
-          which openai || echo "openai not found"
           echo "Copilot CLI:"
           which copilot || echo "copilot not found"
           echo "Gemini CLI:"
