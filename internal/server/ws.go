@@ -41,6 +41,10 @@ const (
 	// Performance tuning
 	maxBroadcastBatchSize = 64 // Max clients per broadcast batch
 	defaultClientCapacity = 16 // Default client map capacity
+
+	// Custom WebSocket close codes (4000-4999 range for private use)
+	CloseCodeQueueOverflow = 4001 // Broadcast or input queue overflow
+	CloseCodeMaxClients    = 4002 // Maximum clients limit reached
 )
 
 // fastRand - Fast PRNG for non-cryptographic random generation (device IDs, etc.)
@@ -162,6 +166,8 @@ type connectionStats struct {
 	currentConnections     int64 // Current active connections (atomic)
 	lastConnectionTime     int64 // Last connection timestamp (nanoseconds, for rate limiting)
 	rateLimitedConnections int64 // Count of connections rejected due to rate limiting (atomic)
+	broadcastDropped       int64 // Count of broadcast events dropped due to queue overflow (atomic)
+	inputDropped           int64 // Count of input messages dropped due to queue overflow (atomic)
 }
 
 // connectionRateLimit - Connection rate limiting configuration
@@ -194,6 +200,7 @@ type WebSocketServer struct {
 	broadcastRateLimit int64               // Max broadcasts per second (0 = disabled)
 	lastBroadcast      int64               // Last broadcast timestamp (atomic, Unix nanoseconds)
 	connRateLimit      connectionRateLimit // Connection rate limiting
+	maxClients         int64               // Maximum concurrent clients (0 = unlimited)
 }
 
 // ClientMessage Client message
@@ -265,10 +272,31 @@ func (s *WebSocketServer) SetConnectionRateLimit(limit int64) {
 	s.connRateLimit.minIntervalNs = int64(time.Second) / limit
 }
 
+// SetMaxClients - Set maximum concurrent clients (0 = unlimited)
+// Protects against memory exhaustion from too many connections
+func (s *WebSocketServer) SetMaxClients(limit int64) {
+	s.maxClients = limit
+}
+
+// checkMaxClients - Check if new connection is allowed under max clients limit
+// Returns true if allowed, false if limit exceeded
+func (s *WebSocketServer) checkMaxClients() bool {
+	if s.maxClients <= 0 {
+		return true // No limit
+	}
+	current := atomic.LoadInt64(&s.stats.currentConnections)
+	return current < s.maxClients
+}
+
 // checkConnectionRateLimit - Check if new connection is allowed under rate limit
 // Returns true if allowed, false if rate limited
-// Enhanced: tracks rate-limited connections for observability
+// Enhanced: tracks rate-limited connections for observability, also checks max clients limit
 func (s *WebSocketServer) checkConnectionRateLimit() bool {
+	// Check max clients first (faster check, no atomic operation needed if limit disabled)
+	if !s.checkMaxClients() {
+		return false
+	}
+
 	if !s.connRateLimit.enabled {
 		return true // Rate limiting disabled
 	}
@@ -773,6 +801,15 @@ func splitLinesCopy(data []byte) [][]byte {
 func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check connection rate limit (before upgrading connection)
 	if !s.checkConnectionRateLimit() {
+		// Determine if rejected due to max clients or rate limiting
+		if s.maxClients > 0 {
+			current := atomic.LoadInt64(&s.stats.currentConnections)
+			if current >= s.maxClients {
+				http.Error(w, fmt.Sprintf("Maximum clients (%d) reached", s.maxClients), http.StatusServiceUnavailable)
+				util.DebugLog("[DEBUG] handleWebSocket: max clients limit exceeded (current=%d, max=%d)", current, s.maxClients)
+				return
+			}
+		}
 		http.Error(w, "Connection rate limit exceeded", http.StatusTooManyRequests)
 		util.DebugLog("[DEBUG] handleWebSocket: connection rate limited")
 		return
@@ -1532,10 +1569,12 @@ func (s *WebSocketServer) broadcast(event state.Event) {
 			// Try to claim this time slot with CAS
 			if !atomic.CompareAndSwapInt64(&s.lastBroadcast, lastBroadcast, now) {
 				// CAS failed = rate limited (silent drop for performance)
+				atomic.AddInt64(&s.stats.broadcastDropped, 1)
 				return
 			}
 		} else {
 			// Within rate limit window (silent drop for performance)
+			atomic.AddInt64(&s.stats.broadcastDropped, 1)
 			return
 		}
 	}
@@ -1545,7 +1584,8 @@ func (s *WebSocketServer) broadcast(event state.Event) {
 	case s.broadcastCh <- event:
 	default:
 		// Channel full - event is still available via state manager
-		// Silent drop to avoid error channel spam during high load
+		// Track dropped event for observability
+		atomic.AddInt64(&s.stats.broadcastDropped, 1)
 	}
 }
 
@@ -1714,6 +1754,9 @@ func (s *WebSocketServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"peak_connections":         atomic.LoadInt64(&s.stats.peakConnections),
 		"current_connections":      atomic.LoadInt64(&s.stats.currentConnections),
 		"rate_limited_connections": atomic.LoadInt64(&s.stats.rateLimitedConnections),
+		"broadcast_dropped":        atomic.LoadInt64(&s.stats.broadcastDropped),
+		"input_dropped":            atomic.LoadInt64(&s.stats.inputDropped),
+		"max_clients":              s.maxClients,
 	}
 
 	// Add cache statistics for observability
@@ -1801,6 +1844,12 @@ const metricsHeadersStatic = `# HELP pal_broker_uptime_seconds Server uptime in 
 # TYPE pal_broker_cli_pid gauge
 # HELP pal_broker_connections_rate_limited_total Total connections rejected due to rate limiting
 # TYPE pal_broker_connections_rate_limited_total counter
+# HELP pal_broker_broadcast_events_dropped_total Total broadcast events dropped due to queue overflow
+# TYPE pal_broker_broadcast_events_dropped_total counter
+# HELP pal_broker_input_messages_dropped_total Total input messages dropped due to queue overflow
+# TYPE pal_broker_input_messages_dropped_total counter
+# HELP pal_broker_max_clients Maximum allowed concurrent clients (0 = unlimited)
+# TYPE pal_broker_max_clients gauge
 `
 
 // metricsHeadersDynamic - Pre-built headers for optional/dynamic metrics
@@ -1930,6 +1979,13 @@ func (s *WebSocketServer) handleMetrics(w http.ResponseWriter, r *http.Request) 
 	writeInt("pal_broker_input_queue_depth", int64(inputQueueDepth))
 	writeInt("pal_broker_broadcast_queue_depth", int64(len(s.broadcastCh)))
 
+	// Queue overflow metrics (dropped events/messages)
+	writeInt("pal_broker_broadcast_events_dropped_total", atomic.LoadInt64(&s.stats.broadcastDropped))
+	writeInt("pal_broker_input_messages_dropped_total", atomic.LoadInt64(&s.stats.inputDropped))
+
+	// Max clients limit
+	writeInt("pal_broker_max_clients", s.maxClients)
+
 	// Broadcast rate limit metrics (conditional)
 	if s.broadcastRateLimit > 0 {
 		sb.WriteString(metricsHeadersBroadcastRateLimit)
@@ -2050,7 +2106,8 @@ func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
 		// Server shutting down, discard message
 		util.DebugLog("[DEBUG] queueInputWithLogging: server shutting down, discarding message")
 	default:
-		// Queue full - log warning but don't block
+		// Queue full - track dropped message and log warning
+		atomic.AddInt64(&s.stats.inputDropped, 1)
 		util.DebugLog("[DEBUG] queueInputWithLogging: input queue full (depth=%d), dropping message", len(s.inputQueue))
 	}
 }
