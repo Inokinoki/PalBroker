@@ -79,7 +79,7 @@ jobs:
       - name: Install Claude Code CLI
         run: |
           echo "Installing Claude Code CLI..."
-          curl -fsSL https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-code@latest/dist/install.sh | sh
+          curl -fsSL https://claude.ai/install.sh | bash
           claude --version || echo "Claude CLI installed"
 
       - name: Install Codex CLI
