@@ -265,7 +265,10 @@ func SafeClose(ch chan interface{}) {
 	defer func() { recover() }()
 	select {
 	case <-ch:
+		// Drained buffered value, now close
+		close(ch)
 	default:
+		// No buffered value, just close
 		close(ch)
 	}
 }

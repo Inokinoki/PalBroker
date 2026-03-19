@@ -129,16 +129,17 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 // Start Start ACP client (start process and initialize)
 func (c *ACPClient) Start() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Prevent double-start
 	if c.started {
+		c.mu.Unlock()
 		util.DebugLog("[DEBUG] ACP client already started, skipping")
 		return nil
 	}
 
 	// Validate command before starting
 	if c.cmd == nil {
+		c.mu.Unlock()
 		return fmt.Errorf("ACP client command not initialized (provider=%s): check provider configuration", c.provider)
 	}
 
@@ -147,12 +148,14 @@ func (c *ACPClient) Start() error {
 		var err error
 		c.stdin, err = c.cmd.StdinPipe()
 		if err != nil {
+			c.mu.Unlock()
 			return fmt.Errorf("ACP stdin pipe failed (provider=%s): %w", c.provider, err)
 		}
 
 		c.stdout, err = c.cmd.StdoutPipe()
 		if err != nil {
 			c.stdin.Close()
+			c.mu.Unlock()
 			return fmt.Errorf("ACP stdout pipe failed (provider=%s): %w", c.provider, err)
 		}
 
@@ -162,6 +165,7 @@ func (c *ACPClient) Start() error {
 		if err := c.cmd.Start(); err != nil {
 			c.stdin.Close()
 			c.stdout.Close()
+			c.mu.Unlock()
 			// Provide actionable error message
 			if err.Error() == "executable file not found in $PATH" {
 				return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
@@ -172,7 +176,11 @@ func (c *ACPClient) Start() error {
 		util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
 	}
 
-	// Send initialize request and read response
+	// Mark as started BEFORE releasing lock (to prevent re-entrancy during sendRequest)
+	c.started = true
+	c.mu.Unlock()
+
+	// Send initialize request and read response (MUST be outside lock to avoid deadlock)
 	initializeResult := make(map[string]interface{})
 	err := c.sendRequest("initialize", map[string]interface{}{
 		"protocolVersion":    1, // ACP protocol version (must be <= 65535)
@@ -181,11 +189,18 @@ func (c *ACPClient) Start() error {
 
 	if err != nil {
 		// Clean up on initialization failure
+		c.mu.Lock()
+		c.started = false
+		c.mu.Unlock()
+
 		if c.cmd.Process != nil {
 			c.cmd.Process.Kill()
 		}
 		if c.stdin != nil {
 			c.stdin.Close()
+		}
+		if c.stdout != nil {
+			c.stdout.Close()
 		}
 		c.stdout = nil
 		c.stdin = nil
@@ -193,7 +208,6 @@ func (c *ACPClient) Start() error {
 	}
 
 	util.DebugLog("[DEBUG] ACP initialized: %+v", initializeResult)
-	c.started = true
 	return nil
 }
 

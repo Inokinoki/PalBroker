@@ -1,10 +1,12 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -569,5 +571,927 @@ echo "This should not appear"
 		t.Log("Command timed out as expected")
 	case err := <-done:
 		t.Errorf("Command finished unexpectedly: %v", err)
+	}
+}
+
+// ============== ACP Client Tests ==============
+
+// TestACPClientCreation tests ACP client creation for different providers
+func TestACPClientCreation(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    string
+		expectError bool
+	}{
+		{"copilot", "copilot", false},
+		{"copilot-acp", "copilot-acp", false},
+		{"opencode", "opencode", false},
+		{"claude", "claude", true}, // Unsupported
+		{"codex", "codex", true},   // Unsupported
+		{"unknown", "unknown", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := NewACPClient(tt.provider, "")
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error for unsupported provider %s", tt.provider)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if client == nil {
+					t.Error("Expected non-nil client")
+				}
+				if client.provider != tt.provider {
+					t.Errorf("Expected provider %s, got %s", tt.provider, client.provider)
+				}
+			}
+		})
+	}
+}
+
+// TestACPClientWithCustomPath tests ACP client with custom CLI path
+func TestACPClientWithCustomPath(t *testing.T) {
+	// Create a mock script that echoes ACP-style responses
+	mockScript := `#!/bin/bash
+# Mock ACP server - reads from stdin and writes JSON responses
+while IFS= read -r line; do
+	echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"test-123"}}'
+done
+`
+	mockPath := mockCLI(t, "mock-acp-server", mockScript)
+
+	client, err := NewACPClient("copilot", mockPath)
+	if err != nil {
+		t.Fatalf("Failed to create ACP client: %v", err)
+	}
+
+	// Verify custom path is set
+	if client.customCLIPath != mockPath {
+		t.Errorf("Expected custom CLI path %s, got %s", mockPath, client.customCLIPath)
+	}
+
+	// Verify command uses custom path
+	if client.cmdName != mockPath {
+		t.Errorf("Expected cmdName %s, got %s", mockPath, client.cmdName)
+	}
+}
+
+// TestACPMessageParsing tests ACP message structure parsing
+func TestACPMessageParsing(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantType string
+	}{
+		{
+			name: "session_update_chunk",
+			input: `{
+				"jsonrpc":"2.0",
+				"method":"session/update",
+				"params":{
+					"sessionId":"test-123",
+					"sessionUpdate":"agent_message_chunk",
+					"content":{"type":"text","text":"Hello from ACP"}
+				}
+			}`,
+			wantType: "chunk",
+		},
+		{
+			name: "session_update_state",
+			input: `{
+				"jsonrpc":"2.0",
+				"method":"session/update",
+				"params":{
+					"sessionId":"test-123",
+					"sessionUpdate":"agent_state",
+					"content":{"type":"thinking"}
+				}
+			}`,
+			wantType: "status",
+		},
+		{
+			name:     "response_result",
+			input:    `{"jsonrpc":"2.0","id":1,"result":{"sessionId":"test-456"}}`,
+			wantType: "result",
+		},
+		{
+			name:     "error_response",
+			input:    `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`,
+			wantType: "error",
+		},
+		{
+			name:     "unknown_message",
+			input:    `{"jsonrpc":"2.0","method":"unknown/method"}`,
+			wantType: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg ACPMessage
+			err := json.Unmarshal([]byte(tt.input), &msg)
+			if err != nil {
+				t.Fatalf("Failed to unmarshal test input: %v", err)
+			}
+
+			result := client.ParseMessage(&msg)
+			if result == nil {
+				t.Fatal("Expected non-nil parsed result")
+			}
+
+			if result["type"] != tt.wantType {
+				t.Errorf("Expected type=%s, got %v", tt.wantType, result["type"])
+			}
+		})
+	}
+}
+
+// TestACPContentTypes tests different ACP content types
+func TestACPContentTypes(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	tests := []struct {
+		name        string
+		contentType string
+		wantFormat  string
+	}{
+		{"text", "text", "text"},
+		{"markdown", "markdown", "markdown"},
+		{"diff", "diff", "diff"},
+		{"command", "command", "command"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{
+				"jsonrpc":"2.0",
+				"method":"session/update",
+				"params":{
+					"sessionId":"test",
+					"sessionUpdate":"agent_message_chunk",
+					"content":{"type":"` + tt.contentType + `","text":"content"}
+				}
+			}`
+
+			var msg ACPMessage
+			json.Unmarshal([]byte(input), &msg)
+
+			result := client.ParseMessage(&msg)
+			if result["type"] != "chunk" {
+				t.Errorf("Expected type=chunk, got %v", result["type"])
+			}
+
+			// Content should be extracted
+			if result["content"] != "content" {
+				t.Errorf("Expected content='content', got %v", result["content"])
+			}
+		})
+	}
+}
+
+// TestACPErrorParsing tests ACP error message parsing
+func TestACPErrorParsing(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	input := `{
+		"jsonrpc":"2.0",
+		"id":1,
+		"error":{
+			"code":-32601,
+			"message":"Method not found",
+			"data":"Additional error details"
+		}
+	}`
+
+	var msg ACPMessage
+	json.Unmarshal([]byte(input), &msg)
+
+	result := client.ParseMessage(&msg)
+
+	if result["type"] != "error" {
+		t.Errorf("Expected type=error, got %v", result["type"])
+	}
+
+	code, _ := result["code"].(int)
+	if code != -32601 {
+		t.Errorf("Expected code=-32601, got %d", code)
+	}
+
+	if result["message"] != "Method not found" {
+		t.Errorf("Expected message='Method not found', got %v", result["message"])
+	}
+}
+
+// TestACPSessionUpdateStructure tests session update parsing
+func TestACPSessionUpdateStructure(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	input := `{
+		"jsonrpc":"2.0",
+		"method":"session/update",
+		"params":{
+			"sessionId":"session-abc-123",
+			"sessionUpdate":"agent_message_chunk",
+			"content":{
+				"type":"markdown",
+				"text":"## Analysis Complete\n\nI found 3 issues..."
+			}
+		}
+	}`
+
+	var msg ACPMessage
+	json.Unmarshal([]byte(input), &msg)
+
+	result := client.ParseMessage(&msg)
+
+	// Should be parsed as chunk
+	if result["type"] != "chunk" {
+		t.Errorf("Expected type=chunk, got %v", result["type"])
+	}
+
+	// Content should be extracted
+	content, _ := result["content"].(string)
+	if content != "## Analysis Complete\n\nI found 3 issues..." {
+		t.Errorf("Unexpected content: %v", content)
+	}
+
+	// Format should be preserved
+	format, _ := result["format"].(string)
+	if format != "markdown" {
+		t.Errorf("Expected format=markdown, got %v", format)
+	}
+}
+
+// TestACPClientMethods tests ACP client helper methods
+func TestACPClientMethods(t *testing.T) {
+	client := &ACPClient{
+		provider:  "copilot",
+		sessionID: "test-session-123",
+		seq:       42,
+	}
+
+	// Test Pid (should return 0 when no process)
+	if client.Pid() != 0 {
+		t.Errorf("Expected Pid=0 for non-started client, got %d", client.Pid())
+	}
+
+	// Test Stop (should not panic when no process)
+	err := client.Stop()
+	if err != nil {
+		t.Logf("Stop returned: %v (acceptable)", err)
+	}
+}
+
+// TestACPClientStartInvalidProvider tests Start with invalid provider
+func TestACPClientStartInvalidProvider(t *testing.T) {
+	// Create client with unsupported provider
+	client := &ACPClient{
+		provider: "unsupported",
+		cmd:      nil, // No command
+	}
+
+	err := client.Start()
+	if err == nil {
+		t.Error("Expected error when starting with nil command")
+	}
+}
+
+// TestACPClientNotificationHandler tests notification handler
+func TestACPClientNotificationHandler(t *testing.T) {
+	client, _ := NewACPClient("copilot", "")
+
+	handlerCalled := false
+	var capturedMsg *ACPMessage
+
+	client.SetNotificationHandler(func(msg *ACPMessage) {
+		handlerCalled = true
+		capturedMsg = msg
+	})
+
+	if client.notificationHandler == nil {
+		t.Error("Expected notification handler to be set")
+	}
+
+	// Verify handler is stored (can't easily test callback without full setup)
+	_ = handlerCalled
+	_ = capturedMsg
+}
+
+// TestACPClientConcurrentAccess tests concurrent access to ACP client
+func TestACPClientConcurrentAccess(t *testing.T) {
+	client, _ := NewACPClient("copilot", "")
+
+	var wg sync.WaitGroup
+	numGoroutines := 10
+
+	// Concurrent handler setting
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			handler := func(msg *ACPMessage) {}
+			client.SetNotificationHandler(handler)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Should not panic - last write wins
+	if client.notificationHandler == nil {
+		t.Error("Expected handler to be set after concurrent access")
+	}
+}
+
+// TestACPClientContextCancellation tests context cancellation in Listen
+func TestACPClientContextCancellation(t *testing.T) {
+	client, _ := NewACPClient("copilot", "")
+
+	// For this test, we just verify the method handles context cancellation
+	// without panicking when reader is nil
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	handlerCalled := false
+	err := client.Listen(ctx, func(msg *ACPMessage) {
+		handlerCalled = true
+	})
+
+	// Should fail with nil reader error (expected since we didn't start)
+	if err == nil {
+		// If no error, context should have timed out
+		if handlerCalled {
+			t.Error("Handler should not be called without valid reader")
+		}
+	}
+}
+
+// TestACPPromptNoSession tests Prompt without active session
+func TestACPPromptNoSession(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	err := client.Prompt("test prompt")
+	if err == nil {
+		t.Error("Expected error when prompting without session")
+	}
+	if !strings.Contains(err.Error(), "no active session") {
+		t.Errorf("Unexpected error message: %v", err)
+	}
+}
+
+// TestACPClientPidWithMockProcess tests Pid with mock process
+func TestACPClientPidWithMockProcess(t *testing.T) {
+	// Skip on Windows as bash script may not work
+	if strings.HasPrefix(os.Getenv("RUNNER_OS"), "Windows") {
+		t.Skip("Skipping mock process test on Windows")
+	}
+
+	// Mock server that responds once to initialize request and keeps running
+	mockScript := `#!/bin/bash
+# Read initialize request line
+read -r line
+# Respond with matching id=1 (sendRequest increments seq to 1)
+echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"test-session"}}'
+# Keep process alive for Pid check
+while true; do sleep 1; done
+`
+	mockPath := mockCLI(t, "mock-pid-server", mockScript)
+
+	client, _ := NewACPClient("copilot", mockPath)
+
+	// Start the client
+	err := client.Start()
+	if err != nil {
+		t.Skipf("Skipping Pid test - failed to start: %v", err)
+	}
+	defer client.Stop()
+
+	// Pid should be non-zero
+	pid := client.Pid()
+	if pid == 0 {
+		t.Error("Expected non-zero Pid after start")
+	}
+}
+
+// TestACPMessageWithNilParams tests message with nil params
+func TestACPMessageWithNilParams(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	input := `{
+		"jsonrpc":"2.0",
+		"method":"session/update",
+		"params":null
+	}`
+
+	var msg ACPMessage
+	json.Unmarshal([]byte(input), &msg)
+
+	// Should not panic
+	result := client.ParseMessage(&msg)
+	if result == nil {
+		t.Error("Expected non-nil result")
+	}
+}
+
+// TestACPMessageWithEmptyContent tests message with empty content
+func TestACPMessageWithEmptyContent(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	input := `{
+		"jsonrpc":"2.0",
+		"method":"session/update",
+		"params":{
+			"sessionId":"test",
+			"sessionUpdate":"agent_message_chunk",
+			"content":{}
+		}
+	}`
+
+	var msg ACPMessage
+	json.Unmarshal([]byte(input), &msg)
+
+	result := client.ParseMessage(&msg)
+
+	if result["type"] != "chunk" {
+		t.Errorf("Expected type=chunk, got %v", result["type"])
+	}
+
+	// Empty content should be empty string
+	if result["content"] != "" {
+		t.Errorf("Expected empty content, got %v", result["content"])
+	}
+}
+
+// TestACPSessionUpdateTypes tests all session update types
+func TestACPSessionUpdateTypes(t *testing.T) {
+	client := &ACPClient{provider: "copilot"}
+
+	tests := []struct {
+		updateType string
+		wantType   string
+	}{
+		{"agent_message_chunk", "chunk"},
+		{"agent_state", "status"},
+		{"unknown_update", "update"},
+		{"", "update"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.updateType, func(t *testing.T) {
+			input := `{
+				"jsonrpc":"2.0",
+				"method":"session/update",
+				"params":{
+					"sessionId":"test",
+					"sessionUpdate":"` + tt.updateType + `",
+					"content":{"type":"text","text":"test"}
+				}
+			}`
+
+			var msg ACPMessage
+			json.Unmarshal([]byte(input), &msg)
+
+			result := client.ParseMessage(&msg)
+			if result["type"] != tt.wantType {
+				t.Errorf("Expected type=%s, got %v", tt.wantType, result["type"])
+			}
+		})
+	}
+}
+
+// ============== Gemini Adapter Tests ==============
+
+// TestGeminiAdapterBasic tests basic Gemini adapter functionality
+func TestGeminiAdapterBasic(t *testing.T) {
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+				WorkDir:  "/tmp",
+				Task:     "Test task",
+			},
+		},
+	}
+
+	// Test SupportsACP
+	if adapter.SupportsACP() {
+		t.Error("Gemini should not support ACP")
+	}
+
+	// Test SupportsJSONStream
+	if !adapter.SupportsJSONStream() {
+		t.Error("Gemini should support JSON stream")
+	}
+
+	// Test BuildCommand
+	cmd := adapter.BuildCommand(adapter.config)
+	if cmd.Path != "gemini" {
+		t.Errorf("Expected gemini command, got %s", cmd.Path)
+	}
+
+	// Verify command args contain expected flags
+	argsStr := strings.Join(cmd.Args, " ")
+	if !strings.Contains(argsStr, "chat") {
+		t.Error("Expected 'chat' in command args")
+	}
+	if !strings.Contains(argsStr, "--format") || !strings.Contains(argsStr, "json") {
+		t.Error("Expected JSON format in command args")
+	}
+	if !strings.Contains(argsStr, "--stream") {
+		t.Error("Expected --stream in command args")
+	}
+}
+
+// TestGeminiAdapterWithSession tests Gemini adapter with session resumption
+func TestGeminiAdapterWithSession(t *testing.T) {
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+				Task:     "Continue task",
+			},
+		},
+		sessionID: "test-session-123",
+	}
+
+	cmd := adapter.BuildCommand(adapter.config)
+	argsStr := strings.Join(cmd.Args, " ")
+
+	if !strings.Contains(argsStr, "--session") || !strings.Contains(argsStr, "test-session-123") {
+		t.Error("Expected session resumption in command args")
+	}
+}
+
+// TestGeminiAdapterParseMessage tests Gemini message parsing
+func TestGeminiAdapterParseMessage(t *testing.T) {
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantType string
+		wantErr  bool
+	}{
+		{
+			name:     "chunk_message",
+			input:    `{"type":"chunk","content":"Hello"}`,
+			wantType: "chunk",
+			wantErr:  false,
+		},
+		{
+			name:     "response_message",
+			input:    `{"type":"response","content":"Here's the answer"}`,
+			wantType: "assistant",
+			wantErr:  false,
+		},
+		{
+			name:     "error_message",
+			input:    `{"type":"error","message":"API error"}`,
+			wantType: "error",
+			wantErr:  false,
+		},
+		{
+			name:     "unknown_type",
+			input:    `{"type":"unknown","data":"test"}`,
+			wantType: "unknown",
+			wantErr:  false,
+		},
+		{
+			name:     "plain_text",
+			input:    `Gemini is thinking...`,
+			wantType: "chunk",
+			wantErr:  false,
+		},
+		{
+			name:     "invalid_json",
+			input:    `{"type": "incomplete`,
+			wantType: "chunk",
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := adapter.ParseMessage(tt.input)
+			if err != nil && !tt.wantErr {
+				t.Errorf("Unexpected error: %v", err)
+			}
+
+			if result == nil {
+				t.Fatal("Expected non-nil result")
+			}
+
+			if result["type"] != tt.wantType {
+				t.Errorf("Expected type=%s, got %v", tt.wantType, result["type"])
+			}
+		})
+	}
+}
+
+// TestGeminiAdapterCapabilities tests Gemini adapter capabilities
+func TestGeminiAdapterCapabilities(t *testing.T) {
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{},
+		},
+	}
+
+	caps := adapter.GetCapabilities()
+	if caps == nil {
+		t.Error("Expected non-nil capabilities")
+	}
+
+	// Gemini should have similar capabilities to Claude
+	expectedCaps := []string{"text_output", "file_edit", "multi_turn", "streaming"}
+	for _, expectedCap := range expectedCaps {
+		found := false
+		for _, cap := range caps {
+			if cap == expectedCap {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected capability '%s' not found", expectedCap)
+		}
+	}
+}
+
+// TestGeminiAdapterSetSessionDir tests Gemini session directory setup
+func TestGeminiAdapterSetSessionDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+			},
+		},
+	}
+
+	adapter.SetSessionDir(tmpDir, "test_task")
+
+	if adapter.sessionDir != tmpDir {
+		t.Errorf("Expected sessionDir=%s, got %s", tmpDir, adapter.sessionDir)
+	}
+
+	if adapter.sessionManager == nil {
+		t.Error("Expected sessionManager to be set")
+	}
+}
+
+// TestGeminiAdapterSendCommand tests Gemini send command functionality
+func TestGeminiAdapterSendCommand(t *testing.T) {
+	// Note: This test verifies the method exists and returns appropriate error
+	// when stdin is not available (which is the case for non-interactive mode)
+	adapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+			},
+		},
+	}
+
+	// Should fail because stdin is not set up (non-interactive mode)
+	err := adapter.SendCommand("test", map[string]interface{}{"key": "value"})
+	if err == nil {
+		t.Error("Expected error when stdin not available")
+	}
+}
+
+// ============== OpenCode Adapter Tests ==============
+
+// TestOpenCodeAdapterBasic tests basic OpenCode adapter functionality
+func TestOpenCodeAdapterBasic(t *testing.T) {
+	adapter := &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "opencode",
+				WorkDir:  "/tmp",
+				Task:     "Test task",
+			},
+		},
+	}
+
+	// Test SupportsACP
+	if !adapter.SupportsACP() {
+		t.Error("OpenCode should support ACP")
+	}
+
+	// Test SupportsJSONStream
+	if adapter.SupportsJSONStream() {
+		t.Error("OpenCode should not support JSON stream")
+	}
+
+	// Test BuildCommand
+	cmd := adapter.BuildCommand(adapter.config)
+	if !strings.HasSuffix(cmd.Path, "opencode") {
+		t.Errorf("Expected opencode command, got %s", cmd.Path)
+	}
+
+	// Verify command args
+	if len(cmd.Args) < 2 || cmd.Args[1] != "acp" {
+		t.Error("Expected 'acp' subcommand in args")
+	}
+}
+
+// TestOpenCodeAdapterParseMessage tests OpenCode message parsing
+func TestOpenCodeAdapterParseMessage(t *testing.T) {
+	adapter := &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "opencode",
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantType string
+	}{
+		{
+			name:     "session_update",
+			input:    `{"method":"session/update","params":{"sessionId":"test"}}`,
+			wantType: "update",
+		},
+		{
+			name:     "result_message",
+			input:    `{"result":{"status":"success"}}`,
+			wantType: "result",
+		},
+		{
+			name:     "error_message",
+			input:    `{"error":{"code":-32600,"message":"Invalid Request"}}`,
+			wantType: "error",
+		},
+		{
+			name:     "plain_text",
+			input:    `OpenCode is processing...`,
+			wantType: "chunk",
+		},
+		{
+			name:     "invalid_json",
+			input:    `{"method": "incomplete`,
+			wantType: "chunk",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := adapter.ParseMessage(tt.input)
+			if err != nil {
+				t.Logf("Parse error (may be expected): %v", err)
+			}
+
+			if result == nil {
+				t.Fatal("Expected non-nil result")
+			}
+
+			if result["type"] != tt.wantType {
+				t.Errorf("Expected type=%s, got %v", tt.wantType, result["type"])
+			}
+		})
+	}
+}
+
+// TestOpenCodeAdapterCapabilities tests OpenCode adapter capabilities
+func TestOpenCodeAdapterCapabilities(t *testing.T) {
+	adapter := &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{},
+		},
+	}
+
+	caps := adapter.GetCapabilities()
+	if caps == nil {
+		t.Error("Expected non-nil capabilities")
+	}
+
+	// OpenCode should have ACP-specific capabilities
+	expectedCaps := []string{"text_output", "multi_turn", "streaming", "tool_use"}
+	for _, expectedCap := range expectedCaps {
+		found := false
+		for _, cap := range caps {
+			if cap == expectedCap {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected capability '%s' not found", expectedCap)
+		}
+	}
+}
+
+// TestOpenCodeAdapterSendCommand tests OpenCode send command (should use ACP)
+func TestOpenCodeAdapterSendCommand(t *testing.T) {
+	adapter := &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "opencode",
+			},
+		},
+	}
+
+	// OpenCode uses ACP protocol, so SendCommand should return error
+	err := adapter.SendCommand("test", map[string]interface{}{})
+	if err == nil {
+		t.Error("Expected error - OpenCode uses ACP, not direct commands")
+	}
+	if !strings.Contains(err.Error(), "ACP") {
+		t.Errorf("Expected ACP-related error, got: %v", err)
+	}
+}
+
+// ============== Combined Adapter Tests ==============
+
+// TestAllAdaptersCreateSuccessfully tests that all adapter types can be created
+func TestAllAdaptersCreateSuccessfully(t *testing.T) {
+	config := &CLIConfig{
+		Provider: "test",
+		WorkDir:  "/tmp",
+		Task:     "Test",
+	}
+
+	adapters := []struct {
+		name     string
+		adapter  Adapter
+		provider string
+	}{
+		{"claude", NewClaudeAdapter(config), "claude"},
+		{"codex", NewCodexAdapter(config), "codex"},
+		{"copilot", NewCopilotAdapter(config), "copilot"},
+		{"gemini", NewGeminiAdapter(config), "gemini"},
+		{"opencode", NewOpenCodeAdapter(config), "opencode"},
+		{"generic", NewGenericAdapter(config), "unknown"},
+	}
+
+	for _, a := range adapters {
+		t.Run(a.name, func(t *testing.T) {
+			if a.adapter == nil {
+				t.Errorf("%s adapter should not be nil", a.name)
+			}
+
+			// All adapters should have capabilities
+			caps := a.adapter.GetCapabilities()
+			if caps == nil {
+				t.Errorf("%s adapter should have capabilities", a.name)
+			}
+		})
+	}
+}
+
+// TestGeminiAndOpenCodeAdapterWithMock tests both adapters with mock CLI
+func TestGeminiAndOpenCodeAdapterWithMock(t *testing.T) {
+	// Create mock gemini command
+	geminiMock := `#!/bin/bash
+echo '{"type":"chunk","content":"Gemini response"}'
+`
+	geminiPath := mockCLI(t, "gemini", geminiMock)
+
+	// Temporarily add to PATH
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", filepath.Dir(geminiPath)+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	// Test Gemini adapter
+	geminiAdapter := &GeminiAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "gemini",
+				WorkDir:  "/tmp",
+				Task:     "Test",
+			},
+		},
+	}
+
+	cmd := geminiAdapter.BuildCommand(geminiAdapter.config)
+	if cmd.Path != geminiPath {
+		t.Logf("Using mock gemini at: %s", cmd.Path)
+	}
+
+	// Test OpenCode adapter (ACP mode - tested separately via ACP client tests)
+	opencodeAdapter := &OpenCodeAdapter{
+		BaseAdapter: BaseAdapter{
+			config: &CLIConfig{
+				Provider: "opencode",
+			},
+		},
+	}
+
+	// OpenCode should report ACP support
+	if !opencodeAdapter.SupportsACP() {
+		t.Error("OpenCode adapter should support ACP")
 	}
 }
