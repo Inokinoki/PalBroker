@@ -23,13 +23,13 @@ type ACPSessionStore struct {
 
 // ACPSessionRecord - A single session record in SQLite
 type ACPSessionRecord struct {
-	SessionID   string  `json:"session_id"`
-	Seq         int64   `json:"seq"`
-	Type        string  `json:"type"` // chunk, assistant, user, system, etc.
-	Timestamp   int64   `json:"timestamp"`
-	Data        string  `json:"data"` // JSON-encoded
-	Content     string  `json:"content,omitempty"`
-	CreatedAt   int64   `json:"created_at"`
+	SessionID string `json:"session_id"`
+	Seq       int64  `json:"seq"`
+	Type      string `json:"type"` // chunk, assistant, user, system, etc.
+	Timestamp int64  `json:"timestamp"`
+	Data      string `json:"data"` // JSON-encoded
+	Content   string `json:"content,omitempty"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 // NewACPSessionStore - Create a new ACP session store
@@ -119,10 +119,10 @@ func (s *ACPSessionStore) RecordSession(sessionID string, event *ACPMessage) err
 		content = update.Content.Text
 
 		dataBytes, _ = json.Marshal(map[string]interface{}{
-			"session_id":      update.SessionID,
-			"session_update":  update.SessionUpdate,
-			"content_type":    update.Content.Type,
-			"content":         update.Content.Text,
+			"session_id":     update.SessionID,
+			"session_update": update.SessionUpdate,
+			"content_type":   update.Content.Type,
+			"content":        update.Content.Text,
 		})
 	} else {
 		// Other ACP messages

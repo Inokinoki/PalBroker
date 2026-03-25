@@ -659,10 +659,10 @@ func TestGetMap(t *testing.T) {
 // TestGetStringSlice tests string slice extraction from map
 func TestGetStringSlice(t *testing.T) {
 	m := map[string]interface{}{
-		"stringSlice":   []string{"a", "b", "c"},
+		"stringSlice":    []string{"a", "b", "c"},
 		"interfaceSlice": []interface{}{"x", "y", "z"},
-		"mixedSlice":    []interface{}{"a", 1, "b"}, // Should only extract strings
-		"wrongType":     "string",
+		"mixedSlice":     []interface{}{"a", 1, "b"}, // Should only extract strings
+		"wrongType":      "string",
 	}
 
 	// Test []string

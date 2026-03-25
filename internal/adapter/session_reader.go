@@ -31,22 +31,22 @@ type SessionReader interface {
 // SessionEvent - A single event from a CLI agent session
 // Compatible with state.Event for easy integration
 type SessionEvent struct {
-	Seq       int64       `json:"seq"`        // Sequence number (auto-assigned during recovery)
-	Type      string      `json:"type"`       // Event type: chunk, assistant, user, system, etc.
-	Timestamp int64       `json:"timestamp"`  // Unix milliseconds
-	Data      interface{} `json:"data"`       // Event payload
-	Raw       string      `json:"-"`          // Original raw line (for debugging)
+	Seq       int64       `json:"seq"`       // Sequence number (auto-assigned during recovery)
+	Type      string      `json:"type"`      // Event type: chunk, assistant, user, system, etc.
+	Timestamp int64       `json:"timestamp"` // Unix milliseconds
+	Data      interface{} `json:"data"`      // Event payload
+	Raw       string      `json:"-"`         // Original raw line (for debugging)
 }
 
 // SessionMetadata - Metadata about a session
 type SessionMetadata struct {
-	SessionID   string    `json:"session_id"`
-	Provider    string    `json:"provider"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	MessageCount int      `json:"message_count"`
-	Model       string    `json:"model,omitempty"`
-	ProjectPath string    `json:"project_path,omitempty"`
+	SessionID    string    `json:"session_id"`
+	Provider     string    `json:"provider"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	MessageCount int       `json:"message_count"`
+	Model        string    `json:"model,omitempty"`
+	ProjectPath  string    `json:"project_path,omitempty"`
 }
 
 // claudeSessionReader - Reads Claude Code session files

@@ -73,19 +73,19 @@ type cacheStats struct {
 
 // Manager State manager
 type Manager struct {
-	sessionDir   string
-	provider     string // AI provider for session recovery (claude, codex, gemini, etc.)
-	sessionID    string // CLI session ID for history recovery
-	mu           sync.RWMutex            // Protects task state operations
-	cacheMu      sync.RWMutex            // Separate mutex for cache operations (reduces contention)
-	outputCache  map[string]*outputCache // Cache output by taskID
+	sessionDir  string
+	provider    string                  // AI provider for session recovery (claude, codex, gemini, etc.)
+	sessionID   string                  // CLI session ID for history recovery
+	mu          sync.RWMutex            // Protects task state operations
+	cacheMu     sync.RWMutex            // Separate mutex for cache operations (reduces contention)
+	outputCache map[string]*outputCache // Cache output by taskID
 
 	// Cache configuration (configurable via env vars)
-	maxEventsPerTask  int           // Max events per task (default: 500)
-	minEventsPerTask  int           // Early eviction threshold (default: 50)
-	maxTotalMemory    int64         // Max total memory in bytes (default: 100 MB)
-	maxTaskCount      int           // Max number of tasks to cache (default: 1000)
-	maxCacheAge       time.Duration // Time-based eviction (default: 0 = disabled)
+	maxEventsPerTask int           // Max events per task (default: 500)
+	minEventsPerTask int           // Early eviction threshold (default: 50)
+	maxTotalMemory   int64         // Max total memory in bytes (default: 100 MB)
+	maxTaskCount     int           // Max number of tasks to cache (default: 1000)
+	maxCacheAge      time.Duration // Time-based eviction (default: 0 = disabled)
 
 	// Cache statistics (protected by cacheMu)
 	stats cacheStats
@@ -101,7 +101,7 @@ const (
 
 	// Memory-based limits (instead of time-based)
 	DefaultTotalCacheMemory = 100 * 1024 * 1024 // 100 MB across all tasks
-	DefaultMaxTaskCount     = 1000                 // Max number of tasks to cache
+	DefaultMaxTaskCount     = 1000              // Max number of tasks to cache
 
 	// Time-based limit (much longer, disabled by default)
 	// Set to 0 to disable time-based eviction entirely
@@ -181,13 +181,13 @@ func NewManager(sessionDir string) *Manager {
 	maxAgeMinutes := parseEnvInt(EnvMaxCacheAge, 0) // Default: disabled
 
 	m := &Manager{
-		sessionDir:        sessionDir,
-		outputCache:       make(map[string]*outputCache),
-		maxEventsPerTask:  maxEvents,
-		minEventsPerTask:  maxEvents / 10, // 10% of max
-		maxTotalMemory:    int64(maxMemoryMB) * 1024 * 1024,
-		maxTaskCount:      maxTasks,
-		maxCacheAge:       parseEnvDuration(EnvMaxCacheAge, maxAgeMinutes),
+		sessionDir:       sessionDir,
+		outputCache:      make(map[string]*outputCache),
+		maxEventsPerTask: maxEvents,
+		minEventsPerTask: maxEvents / 10, // 10% of max
+		maxTotalMemory:   int64(maxMemoryMB) * 1024 * 1024,
+		maxTaskCount:     maxTasks,
+		maxCacheAge:      parseEnvDuration(EnvMaxCacheAge, maxAgeMinutes),
 	}
 
 	util.DebugLog("[DEBUG] Cache config: maxEvents=%d, maxMemory=%d MB, maxTasks=%d, maxAge=%v",
