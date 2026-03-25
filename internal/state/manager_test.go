@@ -130,10 +130,16 @@ func TestAddOutput(t *testing.T) {
 		t.Fatalf("Failed to add output: %v", err)
 	}
 
-	// Verify output file exists
-	outputFile := filepath.Join(mgr.sessionDir, taskID, "output.jsonl")
-	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Error("Expected output.jsonl to exist")
+	// Verify cache is updated (purely in-memory, no file persistence)
+	mgr.cacheMu.RLock()
+	cache, exists := mgr.outputCache[taskID]
+	mgr.cacheMu.RUnlock()
+
+	if !exists {
+		t.Error("Expected cache to exist for task")
+	}
+	if len(cache.events) != 1 {
+		t.Errorf("Expected 1 event in cache, got %d", len(cache.events))
 	}
 
 	// Verify sequence updated

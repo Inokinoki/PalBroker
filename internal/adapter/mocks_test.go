@@ -1228,9 +1228,8 @@ func TestGeminiAdapterCapabilities(t *testing.T) {
 	}
 }
 
-// TestGeminiAdapterSetSessionDir tests Gemini session directory setup
+// TestGeminiAdapterSetSessionDir tests Gemini session manager setup
 func TestGeminiAdapterSetSessionDir(t *testing.T) {
-	tmpDir := t.TempDir()
 	adapter := &GeminiAdapter{
 		BaseAdapter: BaseAdapter{
 			config: &CLIConfig{
@@ -1239,14 +1238,19 @@ func TestGeminiAdapterSetSessionDir(t *testing.T) {
 		},
 	}
 
-	adapter.SetSessionDir(tmpDir, "test_task")
-
-	if adapter.sessionDir != tmpDir {
-		t.Errorf("Expected sessionDir=%s, got %s", tmpDir, adapter.sessionDir)
-	}
+	adapter.SetSessionDir("", "test_task")
 
 	if adapter.sessionManager == nil {
 		t.Error("Expected sessionManager to be set")
+	}
+
+	// Verify session manager has correct provider and taskID
+	if adapter.sessionManager.GetProvider() != "gemini" {
+		t.Errorf("Expected provider=gemini, got %s", adapter.sessionManager.GetProvider())
+	}
+
+	if adapter.sessionManager.GetTaskID() != "test_task" {
+		t.Errorf("Expected taskID=test_task, got %s", adapter.sessionManager.GetTaskID())
 	}
 }
 

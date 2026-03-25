@@ -1,16 +1,17 @@
 package state
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"openpal/internal/adapter"
 	"openpal/internal/util"
 )
 
@@ -72,37 +73,54 @@ type cacheStats struct {
 
 // Manager State manager
 type Manager struct {
-	sessionDir  string
-	mu          sync.RWMutex            // Protects task state operations
-	cacheMu     sync.RWMutex            // Separate mutex for cache operations (reduces contention)
-	outputCache map[string]*outputCache // Cache output by taskID
+	sessionDir   string
+	provider     string // AI provider for session recovery (claude, codex, gemini, etc.)
+	sessionID    string // CLI session ID for history recovery
+	mu           sync.RWMutex            // Protects task state operations
+	cacheMu      sync.RWMutex            // Separate mutex for cache operations (reduces contention)
+	outputCache  map[string]*outputCache // Cache output by taskID
 
-	// Cache configuration
-	cacheTTL    time.Duration // Cache time-to-live
-	maxCacheAge time.Duration // Maximum age before forced eviction
+	// Cache configuration (configurable via env vars)
+	maxEventsPerTask  int           // Max events per task (default: 500)
+	minEventsPerTask  int           // Early eviction threshold (default: 50)
+	maxTotalMemory    int64         // Max total memory in bytes (default: 100 MB)
+	maxTaskCount      int           // Max number of tasks to cache (default: 1000)
+	maxCacheAge       time.Duration // Time-based eviction (default: 0 = disabled)
 
 	// Cache statistics (protected by cacheMu)
 	stats cacheStats
 }
 
 // Cache configuration constants
-// Optimized: more aggressive eviction for better memory efficiency
+// Optimized: memory-based limits with LRU eviction instead of time-based
 // Tuned for typical openpal workload: short-lived tasks with bursty output
 const (
-	DefaultCacheTTL    = 60 * time.Second // Reduced for fresher data and lower memory
-	DefaultMaxCacheAge = 2 * time.Minute  // Aggressive memory freeing
-	CleanupInterval    = 10 * time.Second // More frequent cleanup for responsive memory management
-	MaxCacheSize       = 150              // Lower memory footprint per task
-	MinCacheSize       = 25               // Earlier eviction threshold
+	// Per-task event limits
+	DefaultMaxEventsPerTask = 500 // Increased: 500 events per task (~250 KB)
+	DefaultMinEventsPerTask = 50  // Early eviction threshold
+
+	// Memory-based limits (instead of time-based)
+	DefaultTotalCacheMemory = 100 * 1024 * 1024 // 100 MB across all tasks
+	DefaultMaxTaskCount     = 1000                 // Max number of tasks to cache
+
+	// Time-based limit (much longer, disabled by default)
+	// Set to 0 to disable time-based eviction entirely
+	DefaultMaxCacheAge = 0 // Disabled - use LRU instead
+
+	// Cleanup frequency
+	CleanupInterval = 30 * time.Second // Check every 30 seconds
+
+	// Average event size for memory calculation (conservative estimate)
+	AvgEventSize = 512 // bytes per event (JSON overhead + data)
 )
 
-// eventPool - Pool for reusing Event structs during file reading
-// Optimized: reduces allocations in GetIncrementalOutput hot path
-var eventPool = sync.Pool{
-	New: func() interface{} {
-		return &Event{}
-	},
-}
+// Environment variable names
+const (
+	EnvMaxEventsPerTask  = "OPENPAL_CACHE_MAX_EVENTS"
+	EnvTotalCacheMemory  = "OPENPAL_CACHE_MAX_MEMORY_MB"
+	EnvMaxCacheTaskCount = "OPENPAL_CACHE_MAX_TASKS"
+	EnvMaxCacheAge       = "OPENPAL_CACHE_MAX_AGE_MINUTES"
+)
 
 // cleanupCacheIdxSlicePool - Pool for reusable index slices in CleanupCache
 // Optimized: reduces allocations during LRU eviction sorting (covers 99% of cases with 64 capacity)
@@ -131,14 +149,49 @@ var cleanupCacheTimeSlicePool = sync.Pool{
 	},
 }
 
+// parseEnvInt - Parse integer from environment variable with default
+func parseEnvInt(key string, defaultValue int) int {
+	if val := os.Getenv(key); val != "" {
+		if intVal, err := strconv.Atoi(val); err == nil && intVal > 0 {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// parseEnvDuration - Parse duration from environment variable (in minutes) with default
+func parseEnvDuration(key string, defaultMinutes int) time.Duration {
+	if val := os.Getenv(key); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	if defaultMinutes <= 0 {
+		return 0 // Disabled
+	}
+	return time.Duration(defaultMinutes) * time.Minute
+}
+
 // NewManager CreateState manager
 func NewManager(sessionDir string) *Manager {
+	// Read configuration from environment variables
+	maxEvents := parseEnvInt(EnvMaxEventsPerTask, DefaultMaxEventsPerTask)
+	maxMemoryMB := parseEnvInt(EnvTotalCacheMemory, DefaultTotalCacheMemory/(1024*1024))
+	maxTasks := parseEnvInt(EnvMaxCacheTaskCount, DefaultMaxTaskCount)
+	maxAgeMinutes := parseEnvInt(EnvMaxCacheAge, 0) // Default: disabled
+
 	m := &Manager{
-		sessionDir:  sessionDir,
-		outputCache: make(map[string]*outputCache),
-		cacheTTL:    DefaultCacheTTL,
-		maxCacheAge: DefaultMaxCacheAge,
+		sessionDir:        sessionDir,
+		outputCache:       make(map[string]*outputCache),
+		maxEventsPerTask:  maxEvents,
+		minEventsPerTask:  maxEvents / 10, // 10% of max
+		maxTotalMemory:    int64(maxMemoryMB) * 1024 * 1024,
+		maxTaskCount:      maxTasks,
+		maxCacheAge:       parseEnvDuration(EnvMaxCacheAge, maxAgeMinutes),
 	}
+
+	util.DebugLog("[DEBUG] Cache config: maxEvents=%d, maxMemory=%d MB, maxTasks=%d, maxAge=%v",
+		m.maxEventsPerTask, maxMemoryMB, m.maxTaskCount, m.maxCacheAge)
 
 	// Start background cache cleanup goroutine
 	go m.cleanupLoop()
@@ -146,31 +199,91 @@ func NewManager(sessionDir string) *Manager {
 	return m
 }
 
-// cleanupLoop - Periodically clean up expired caches with adaptive interval
-// Pressure levels: 0=empty(30s), 1=low<25(20s), 2=normal(10s), 3=high>75(5s)
-// Optimized 2026-02-24: Skip cleanup entirely when cache is empty (no lock acquisition)
-func (m *Manager) cleanupLoop() {
-	sleepDurations := [4]time.Duration{30 * time.Second, 20 * time.Second, 10 * time.Second, 5 * time.Second}
+// SetProvider - Set the AI provider for session recovery
+func (m *Manager) SetProvider(provider string) {
+	m.provider = provider
+}
 
+// SetSessionID - Set the CLI session ID for history recovery
+func (m *Manager) SetSessionID(sessionID string) {
+	m.sessionID = sessionID
+}
+
+// GetProvider - Get the AI provider
+func (m *Manager) GetProvider() string {
+	return m.provider
+}
+
+// GetSessionID - Get the CLI session ID
+func (m *Manager) GetSessionID() string {
+	return m.sessionID
+}
+
+// RecoverSessionFromCLI recovers session events from CLI agent's native storage
+// This is called on cache miss to retrieve historical messages from the CLI's session files
+// Supports: Claude (JSONL), Codex (SQLite + JSONL), Gemini (JSON)
+func (m *Manager) RecoverSessionFromCLI() ([]Event, error) {
+	if m.provider == "" || m.sessionID == "" {
+		return nil, nil // No recovery possible without provider/session
+	}
+
+	// Create session reader for the provider
+	reader := adapter.CreateSessionReader(m.provider, m.sessionDir)
+	if reader == nil {
+		return nil, nil // Provider not supported for recovery
+	}
+
+	// Read session events
+	sessionEvents, err := reader.ReadSession(m.sessionID)
+	if err != nil {
+		// Session not found or read error - not fatal, just return nil
+		util.DebugLog("[DEBUG] session recovery failed for %s/%s: %v", m.provider, m.sessionID, err)
+		return nil, nil
+	}
+
+	// Convert adapter.SessionEvent to state.Event
+	events := make([]Event, len(sessionEvents))
+	for i, se := range sessionEvents {
+		events[i] = Event{
+			Seq:       se.Seq,
+			Type:      se.Type,
+			Timestamp: se.Timestamp,
+			Data:      se.Data,
+		}
+	}
+
+	util.DebugLog("[DEBUG] recovered %d events from %s session %s", len(events), m.provider, m.sessionID)
+	return events, nil
+}
+
+// cleanupLoop - Periodically clean up expired caches with adaptive interval
+// Optimized: memory-based pressure levels instead of fixed thresholds
+func (m *Manager) cleanupLoop() {
 	for {
 		// Fast path: check cache count without lock using atomic size
 		cacheCount := int(atomic.LoadInt64(&m.stats.size))
 
 		if cacheCount == 0 {
-			time.Sleep(sleepDurations[0])
+			time.Sleep(CleanupInterval * 3)
 			continue
 		}
 
-		var level int
-		if cacheCount < MinCacheSize {
-			level = 1
-		} else if cacheCount > MaxCacheSize/2 {
-			level = 3
+		// Adaptive cleanup frequency based on cache pressure
+		var sleepTime time.Duration
+		pressure := float64(cacheCount) / float64(m.maxTaskCount)
+
+		if pressure < 0.25 {
+			// Low pressure: cleanup less frequently
+			sleepTime = CleanupInterval * 2
+		} else if pressure > 0.5 {
+			// High pressure: cleanup more frequently
+			sleepTime = CleanupInterval / 2
 		} else {
-			level = 2
+			// Normal pressure
+			sleepTime = CleanupInterval
 		}
 
-		time.Sleep(sleepDurations[level])
+		time.Sleep(sleepTime)
 		m.CleanupCache()
 	}
 }
@@ -249,8 +362,9 @@ func (m *Manager) nextSeqWithTime(taskID string, now int64) (int64, error) {
 	return state.Seq, nil
 }
 
-// AddOutput AddOutput event
+// AddOutput AddOutput event (purely in-memory, no file persistence)
 // Optimization 2026-02-23: Use single time.Now() call for both seq update and timestamp
+// Note: Messages are cached in memory only - no file persistence
 func (m *Manager) AddOutput(taskID string, event Event) error {
 	now := time.Now().UnixMilli()
 
@@ -265,32 +379,7 @@ func (m *Manager) AddOutput(taskID string, event Event) error {
 	// Clone data before caching to avoid race conditions
 	event.Data = cloneEventData(event.Data)
 
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-
-	// AppendWrite output.jsonl with O_APPEND for atomic writes
-	f, err := os.OpenFile(
-		filepath.Join(m.sessionDir, taskID, "output.jsonl"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-		0644,
-	)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	// Write line (OS will buffer and sync periodically - no need for explicit Sync on every write)
-	_, err = f.Write(append(data, '\n'))
-	if err != nil {
-		return err
-	}
-
-	// Note: Removed f.Sync() for performance - OS handles buffering
-	// Data durability is still ensured by O_APPEND and file close
-
-	// Update cache
+	// Update cache only (no file I/O)
 	m.updateCache(taskID, event)
 
 	return nil
@@ -324,7 +413,7 @@ func (m *Manager) updateCache(taskID string, event Event) {
 	if !exists {
 		// Optimized: pre-allocate with capacity based on typical workload
 		cache = &outputCache{
-			events:     make([]Event, 0, MinCacheSize),
+			events:     make([]Event, 0, m.minEventsPerTask),
 			createdAt:  now,
 			lastAccess: now,
 		}
@@ -334,11 +423,11 @@ func (m *Manager) updateCache(taskID string, event Event) {
 
 	// Eviction check and handling (sliding window eviction)
 	// Optimized: check capacity before append to avoid reallocation
-	if len(cache.events) >= MaxCacheSize {
-		// Slide window: copy last MaxCacheSize events to beginning
+	if len(cache.events) >= m.maxEventsPerTask {
+		// Slide window: copy last maxEventsPerTask events to beginning
 		// This avoids allocating a new slice
-		copy(cache.events, cache.events[len(cache.events)-MaxCacheSize:])
-		cache.events = cache.events[:MaxCacheSize]
+		copy(cache.events, cache.events[len(cache.events)-m.maxEventsPerTask:])
+		cache.events = cache.events[:m.maxEventsPerTask]
 		atomic.AddInt64(&m.stats.evictions, 1)
 	}
 
@@ -397,67 +486,39 @@ func (m *Manager) UpdateDeviceSeq(taskID, deviceID string, seq int64) error {
 	return m.saveDevices(taskID, devices)
 }
 
-// GetIncrementalOutput Get incremental output
-// Optimized: uses eventPool to reduce allocations during file reading
+// GetIncrementalOutput Get incremental output (purely in-memory with CLI session recovery)
+// Returns cached events if available, attempts CLI session recovery on cache miss
 func (m *Manager) GetIncrementalOutput(taskID string, fromSeq int64) ([]Event, error) {
 	// Try cache first for better performance
 	if events := m.getFromCache(taskID, fromSeq); events != nil {
 		return events, nil
 	}
 
-	// Fallback to file read
-	path := filepath.Join(m.sessionDir, taskID, "output.jsonl")
-
-	file, err := os.Open(path)
+	// Cache miss: try to recover from CLI session storage
+	recoveredEvents, err := m.RecoverSessionFromCLI()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []Event{}, nil
-		}
 		return nil, err
 	}
-	defer file.Close()
 
-	// Pre-allocate slice with reasonable capacity
-	events := make([]Event, 0, 16)
-	scanner := bufio.NewScanner(file)
+	if len(recoveredEvents) > 0 {
+		// Populate cache with recovered events for future requests
+		m.populateCache(taskID, recoveredEvents)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+		// Filter events by fromSeq (only return events newer than client's last read)
+		var filtered []Event
+		for _, e := range recoveredEvents {
+			if e.Seq > fromSeq {
+				filtered = append(filtered, e)
+			}
 		}
 
-		// Get event from pool to reduce allocations
-		event := eventPool.Get().(*Event)
-		if err := json.Unmarshal(line, event); err != nil {
-			eventPool.Put(event)
-			continue
-		}
-
-		if event.Seq > fromSeq {
-			// Clone the event (pool events are reused, so we need a copy)
-			events = append(events, Event{
-				Seq:       event.Seq,
-				Type:      event.Type,
-				Timestamp: event.Timestamp,
-				Data:      cloneEventData(event.Data),
-			})
-		}
-
-		// Return event to pool after processing
-		event.Seq = 0
-		event.Type = ""
-		event.Timestamp = 0
-		event.Data = nil
-		eventPool.Put(event)
+		util.DebugLog("[DEBUG] GetIncrementalOutput: recovered %d events (%d filtered by seq)", len(recoveredEvents), len(filtered))
+		return filtered, nil
 	}
 
-	// Populate cache with loaded events
-	if len(events) > 0 {
-		m.populateCache(taskID, events)
-	}
-
-	return events, scanner.Err()
+	// No recovery possible: return empty
+	// Client will receive new messages from this point forward
+	return []Event{}, nil
 }
 
 // getFromCache - Get events from cache (with TTL check, binary search)
@@ -502,14 +563,6 @@ func (m *Manager) getFromCache(taskID string, fromSeq int64) []Event {
 		return result
 	}
 
-	// Check TTL (deferred time.Now() call until needed)
-	now := time.Now()
-	if now.Sub(cache.createdAt) > m.cacheTTL {
-		m.cacheMu.RUnlock()
-		atomic.AddInt64(&m.stats.totalMisses, 1)
-		return nil
-	}
-
 	// Binary search for first event with seq > fromSeq (~20% of calls)
 	idx := binarySearchSeq(cache.events, fromSeq)
 	if idx >= eventCount {
@@ -524,6 +577,7 @@ func (m *Manager) getFromCache(taskID string, fromSeq int64) []Event {
 	copy(result, remaining)
 
 	// Update lastAccess outside read lock (best-effort for LRU)
+	now := time.Now()
 	if now.Sub(cache.lastAccess) > 5*time.Second {
 		m.cacheMu.Lock()
 		if cache, exists := m.outputCache[taskID]; exists && now.Sub(cache.lastAccess) > 5*time.Second {
@@ -550,8 +604,8 @@ func (m *Manager) populateCache(taskID string, events []Event) {
 	// Pre-allocate if needed
 	if cap(cache.events) < len(cache.events)+len(events) {
 		newCap := cap(cache.events) + len(events)
-		if newCap > MaxCacheSize {
-			newCap = MaxCacheSize
+		if newCap > m.maxEventsPerTask {
+			newCap = m.maxEventsPerTask
 		}
 		newEvents := make([]Event, len(cache.events), newCap)
 		copy(newEvents, cache.events)
@@ -560,9 +614,9 @@ func (m *Manager) populateCache(taskID string, events []Event) {
 	cache.events = append(cache.events, events...)
 
 	// Limit cache size
-	if len(cache.events) > MaxCacheSize {
-		copy(cache.events, cache.events[len(cache.events)-MaxCacheSize:])
-		cache.events = cache.events[:MaxCacheSize]
+	if len(cache.events) > m.maxEventsPerTask {
+		copy(cache.events, cache.events[len(cache.events)-m.maxEventsPerTask:])
+		cache.events = cache.events[:m.maxEventsPerTask]
 	}
 }
 
@@ -652,7 +706,7 @@ var cacheEntrySlicePool = sync.Pool{
 // - Pool allocation for medium caches (17-64): zero allocation after warmup
 // - Heap allocation for large caches (>64): rare case
 //
-// Improvement: Single struct slice reduces memory fragmentation and improves cache locality
+// Improvement: Memory-based LRU eviction instead of time-based
 func (m *Manager) CleanupCache() int {
 	now := time.Now()
 
@@ -664,23 +718,31 @@ func (m *Manager) CleanupCache() int {
 		return 0
 	}
 
-	// Fast path: skip cleanup if cache pressure is low (<25% of MaxCacheSize)
-	if cacheCount < MaxCacheSize/4 {
+	// Calculate current memory usage
+	totalMemory := int64(0)
+	for _, cache := range m.outputCache {
+		totalMemory += int64(len(cache.events)) * AvgEventSize
+	}
+
+	// Fast path: skip cleanup if well under limits
+	if cacheCount < m.maxTaskCount/4 && totalMemory < m.maxTotalMemory/2 {
 		return 0
 	}
 
-	targetCount := MaxCacheSize * 3 / 4
 	evicted := 0
 
-	// Phase 1: Age-based eviction (no allocation, fast path)
-	for taskID, cache := range m.outputCache {
-		if now.Sub(cache.createdAt) > m.maxCacheAge {
-			delete(m.outputCache, taskID)
-			evicted++
+	// Phase 1: Optional time-based eviction (if maxCacheAge > 0)
+	if m.maxCacheAge > 0 {
+		for taskID, cache := range m.outputCache {
+			if now.Sub(cache.createdAt) > m.maxCacheAge {
+				delete(m.outputCache, taskID)
+				evicted++
+				totalMemory -= int64(len(cache.events)) * AvgEventSize
+			}
 		}
 	}
 
-	// Early exit if under target after age-based eviction
+	// Check if we're still over limits after Phase 1
 	remaining := len(m.outputCache)
 	if remaining == 0 {
 		atomic.AddInt64(&m.stats.evictions, int64(evicted))
@@ -688,57 +750,74 @@ func (m *Manager) CleanupCache() int {
 		return evicted
 	}
 
-	if remaining <= targetCount {
-		atomic.AddInt64(&m.stats.evictions, int64(evicted))
-		atomic.StoreInt64(&m.stats.size, int64(remaining))
-		return evicted
+	// Recalculate memory after Phase 1
+	totalMemory = 0
+	for _, cache := range m.outputCache {
+		totalMemory += int64(len(cache.events)) * AvgEventSize
 	}
 
-	// Fast path: single cache entry (no sorting needed)
-	if remaining == 1 {
-		for taskID := range m.outputCache {
-			delete(m.outputCache, taskID)
-			evicted++
+	// Phase 2: Memory-based LRU eviction (if needed)
+	if remaining > m.maxTaskCount || totalMemory > m.maxTotalMemory {
+		// Need to evict based on LRU
+		// Target: get under both task count AND memory limits
+		targetTaskCount := m.maxTaskCount * 3 / 4
+		targetMemory := m.maxTotalMemory * 3 / 4
+
+		// Build list of caches for sorting
+		type cacheEntry struct {
+			taskID     string
+			lastAccess time.Time
+			memory     int64
 		}
-		atomic.AddInt64(&m.stats.evictions, int64(evicted))
-		atomic.StoreInt64(&m.stats.size, 0)
-		return evicted
-	}
 
-	// Phase 2: LRU eviction (sort by lastAccess)
-	// Stack allocation for tiny caches (<=16), pool for medium (<=64), heap for large
-	var stackEntries [16]cacheEntry
-	var entries []cacheEntry
+		// Stack allocation for tiny caches, pool for medium, heap for large
+		var stackEntries [16]cacheEntry
+		var entries []cacheEntry
 
-	if remaining <= 16 {
-		entries = stackEntries[:0]
-	} else if remaining <= 64 {
-		entriesPtr := cacheEntrySlicePool.Get().(*[]cacheEntry)
-		entries = *entriesPtr
-		entries = entries[:0]
-		defer func() {
-			*entriesPtr = entries
-			cacheEntrySlicePool.Put(entriesPtr)
-		}()
-	} else {
-		entries = make([]cacheEntry, 0, remaining)
-	}
+		if remaining <= 16 {
+			entries = stackEntries[:0]
+		} else if remaining <= 64 {
+			entriesPtr := cacheEntrySlicePool.Get().(*[]cacheEntry)
+			entries = *entriesPtr
+			entries = entries[:0]
+			defer func() {
+				*entriesPtr = entries
+				cacheEntrySlicePool.Put(entriesPtr)
+			}()
+		} else {
+			entries = make([]cacheEntry, 0, remaining)
+		}
 
-	// Build entry slice (single struct per cache, better cache locality)
-	for taskID, cache := range m.outputCache {
-		entries = append(entries, cacheEntry{taskID: taskID, lastAccess: cache.lastAccess})
-	}
+		for taskID, cache := range m.outputCache {
+			entries = append(entries, cacheEntry{
+				taskID:     taskID,
+				lastAccess: cache.lastAccess,
+				memory:     int64(len(cache.events)) * AvgEventSize,
+			})
+		}
 
-	// Sort by lastAccess (oldest first for LRU eviction)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].lastAccess.Before(entries[j].lastAccess)
-	})
+		// Sort by lastAccess (oldest first for LRU eviction)
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].lastAccess.Before(entries[j].lastAccess)
+		})
 
-	// Evict oldest caches until under target
-	toEvict := remaining - targetCount
-	for i := 0; i < toEvict && i < len(entries); i++ {
-		delete(m.outputCache, entries[i].taskID)
-		evicted++
+		// Evict oldest entries until under limits
+		currentTasks := remaining
+		currentMemory := totalMemory
+
+		for _, entry := range entries {
+			if currentTasks <= targetTaskCount && currentMemory <= targetMemory {
+				break
+			}
+
+			delete(m.outputCache, entry.taskID)
+			evicted++
+			currentTasks--
+			currentMemory -= entry.memory
+		}
+
+		util.DebugLog("[DEBUG] CleanupCache: evicted %d tasks (was %d, now %d), memory %d -> %d bytes",
+			evicted, remaining, currentTasks, totalMemory, currentMemory)
 	}
 
 	atomic.AddInt64(&m.stats.evictions, int64(evicted))
@@ -811,7 +890,9 @@ func (m *Manager) GetCacheStats() map[string]interface{} {
 	stats["hit_rate"] = hitRate
 	stats["efficiency"] = efficiency
 	stats["tasks"] = taskCount
-	stats["ttl_seconds"] = m.cacheTTL.Seconds()
+	stats["max_events_per_task"] = m.maxEventsPerTask
+	stats["max_memory_mb"] = m.maxTotalMemory / (1024 * 1024)
+	stats["max_tasks"] = m.maxTaskCount
 	stats["max_age_minutes"] = m.maxCacheAge.Minutes()
 	stats["avg_events_per_cache"] = avgEventsPerCache
 	stats["memory_estimate_kb"] = memoryEstimateKB

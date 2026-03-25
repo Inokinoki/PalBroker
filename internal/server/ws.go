@@ -10,8 +10,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -187,7 +185,6 @@ type WebSocketServer struct {
 	mu                 sync.RWMutex
 	broadcastCh        chan state.Event
 	errorCh            chan error
-	historyFile        *os.File // File for saving CLI interaction history
 	config             ClientConfig
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -210,35 +207,16 @@ type ClientMessage struct {
 }
 
 // NewWebSocketServer Create WebSocket server (CLI not started yet)
-func NewWebSocketServer(stateMgr *state.Manager, taskID string, cliAdapter *adapter.Manager, saveHistory bool, sessionDir string) *WebSocketServer {
+func NewWebSocketServer(stateMgr *state.Manager, taskID string, cliAdapter *adapter.Manager, sessionDir string) *WebSocketServer {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	var historyFile *os.File
-	if saveHistory {
-		// Create history file in session directory
-		historyPath := filepath.Join(sessionDir, taskID, "history.log")
-		if err := os.MkdirAll(filepath.Dir(historyPath), 0755); err != nil {
-			util.DebugLog("[DEBUG] Warning: failed to create history directory: %v", err)
-		} else {
-			var err error
-			historyFile, err = os.OpenFile(historyPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err != nil {
-				util.DebugLog("[DEBUG] Warning: failed to create history file: %v", err)
-			} else {
-				util.DebugLog("[DEBUG] History file created: %s", historyPath)
-			}
-		}
-	}
 
 	s := &WebSocketServer{
 		stateMgr:    stateMgr,
 		taskID:      taskID,
-		cli:         nil, // Not started yet
 		cliAdapter:  cliAdapter,
 		clients:     make(map[string]*WebSocketClient, defaultClientCapacity),
 		broadcastCh: make(chan state.Event, 100),
 		errorCh:     make(chan error, 10),
-		historyFile: historyFile,
 		inputQueue:  make(chan InputMessage, 100), // Buffered queue
 		sessionDir:  sessionDir,
 		startedAt:   time.Now(),
@@ -431,16 +409,6 @@ func (s *WebSocketServer) Stop() error {
 		util.DebugLog("[DEBUG] Warning: goroutine wait timeout")
 	}
 
-	// 7. Close history file
-	if s.historyFile != nil {
-		if err := s.historyFile.Close(); err != nil {
-			util.DebugLog("[DEBUG] Warning: history file close error: %v", err)
-		} else {
-			util.DebugLog("[DEBUG] History file closed")
-		}
-		s.historyFile = nil
-	}
-
 	util.DebugLog("[DEBUG] WebSocket server stopped")
 	return nil
 }
@@ -578,22 +546,15 @@ var forwardStreamBufPool = sync.Pool{
 	},
 }
 
-// historyWriterPool - Pool for buffered writers to history files
-// Optimized: reduces allocations and syscalls for history file writes
-var historyWriterPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewWriterSize(nil, 8192) // Increased buffer size for better batching
-	},
-}
-
 // forwardStream - Forward CLI output to state manager and broadcast channel
-// Optimized: reduced allocations, batched history writes, early exits, minimal debug logging
+// Optimized: reduced allocations, early exits, minimal debug logging
 // Enhanced: fast path for empty lines, reduced time.Now() calls, optimized JSON parsing
 // Optimization 2026-02-24 03:23: removed verbose start/exit logs (noise reduction)
 // Optimization 2026-02-24 03:44: Added line length check before byte access (prevents panic on malformed input)
 // Optimization 2026-02-24 05:44: Removed redundant debug logs in hot path (zero overhead)
-// Optimization 2026-02-24 15:04: Eliminated string(line) allocation in plain text path by using unsafe conversion
 // Enhancement 2026-02-24: Extract and save Claude session ID from output
+// Purely in-memory: no file persistence, all data cached in state manager
+// Enhanced 2026-03-19: Set provider and session ID in state manager for recovery
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	scanner := bufio.NewScanner(reader)
 	const maxCapacity = 1024 * 1024
@@ -603,40 +564,22 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 	scanner.Buffer(*bufPtr, maxCapacity)
 
 	// Fast path: cache frequently accessed fields (reduces struct dereferences)
-	historyFile := s.historyFile
-	enableHistory := historyFile != nil
 	stateMgr := s.stateMgr
 	broadcastCh := s.broadcastCh
 	taskID := s.taskID
 	provider := ""
 	if s.cliAdapter != nil {
 		provider = s.cliAdapter.GetProvider()
-	}
-
-	// Initialize history writer only if needed
-	var histWriter *bufio.Writer
-	if enableHistory {
-		histWriter = historyWriterPool.Get().(*bufio.Writer)
-		histWriter.Reset(historyFile)
-		defer func() {
-			histWriter.Flush()
-			historyWriterPool.Put(histWriter)
-		}()
+		// Set provider in state manager for session recovery
+		stateMgr.SetProvider(provider)
 	}
 
 	// Reusable buffers (allocated once, reused per iteration)
 	var event state.Event
-	timestampBuf := make([]byte, 0, 32)
-	historyBuf := make([]byte, 0, 512) // Increased capacity for typical log lines
-	lineCount := 0
-	const flushInterval = 32
 
 	for scanner.Scan() {
 		select {
 		case <-s.ctx.Done():
-			if histWriter != nil {
-				histWriter.Flush()
-			}
 			return
 		default:
 		}
@@ -657,30 +600,29 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			}
 			if adapter, ok := s.cliAdapter.GetAdapter().(sessionUpdater); ok {
 				adapter.UpdateSessionID(string(line))
+				// Also sync session ID to state manager for recovery
+				type sessionGetter interface {
+					GetSessionID() string
+				}
+				if getter, ok := adapter.(sessionGetter); ok {
+					if sid := getter.GetSessionID(); sid != "" {
+						stateMgr.SetSessionID(sid)
+					}
+				}
 			}
 		}
 
-		// Write to history file (batched for performance)
-		if enableHistory && histWriter != nil {
-			historyBuf = historyBuf[:0]
-			historyBuf = append(historyBuf, '[')
-			timestampBuf = timestampBuf[:0]
-			timestampBuf = now.AppendFormat(timestampBuf, "2006-01-02 15:04:05")
-			historyBuf = append(historyBuf, timestampBuf...)
-			historyBuf = append(historyBuf, "] ["...)
-			historyBuf = append(historyBuf, eventType...)
-			historyBuf = append(historyBuf, "] "...)
-			historyBuf = append(historyBuf, line...)
-			historyBuf = append(historyBuf, '\n')
-
-			if _, err := histWriter.Write(historyBuf); err != nil {
-				util.DebugLog("forwardStream: history write error: %v", err)
+		// Sync ACP session ID to state manager (for Copilot/OpenCode)
+		if provider == "copilot" || provider == "opencode" {
+			type acpSessionGetter interface {
+				GetSessionID() string
 			}
-
-			lineCount++
-			if lineCount >= flushInterval {
-				histWriter.Flush()
-				lineCount = 0
+			if acpClient, ok := s.cliAdapter.GetACPClient(); ok {
+				if getter, ok := acpClient.(acpSessionGetter); ok {
+					if sid := getter.GetSessionID(); sid != "" {
+						stateMgr.SetSessionID(sid)
+					}
+				}
 			}
 		}
 
@@ -691,7 +633,6 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 			event.Type = eventType
 			event.Timestamp = now.UnixMilli()
 			// Inline map creation for common case (AddOutput clones data, so fresh map is safe)
-			// Use unsafe string conversion to avoid allocation (line is not modified after this)
 			event.Data = map[string]interface{}{"content": string(line)}
 
 			if err := stateMgr.AddOutput(taskID, event); err != nil {
@@ -730,10 +671,6 @@ func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
 		default:
 			// Channel full, event available via state manager
 		}
-	}
-
-	if histWriter != nil {
-		histWriter.Flush()
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
@@ -1412,24 +1349,6 @@ func (s *WebSocketServer) sendApprovalToCLI(approve bool) {
 	}
 }
 
-// logEventToHistory - Log event content to history file
-// Optimized: inline content extraction, early exit if no history file or no content
-func (s *WebSocketServer) logEventToHistory(event state.Event) {
-	if s.historyFile == nil {
-		return
-	}
-	// Inline content extraction (avoids function call overhead)
-	eventData, ok := event.Data.(map[string]interface{})
-	if !ok {
-		return
-	}
-	content, ok := eventData["content"].(string)
-	if !ok || content == "" {
-		return
-	}
-	s.writeHistoryLog("output", content)
-}
-
 // broadcastToClients broadcasts an event to all connected clients.
 // Optimized: stack allocation for common cases, batch error collection,
 // transient error filtering, client snapshot to minimize lock hold time
@@ -1455,9 +1374,6 @@ func (s *WebSocketServer) broadcastToClients(event state.Event) {
 		s.mu.RUnlock()
 		return
 	}
-
-	// Log to history once (before client iteration, early exit for no history)
-	s.logEventToHistory(event)
 
 	// Pre-serialize event JSON once (avoids repeated marshaling for each client)
 	eventJSON, marshalErr := json.Marshal(event)
@@ -2029,66 +1945,10 @@ func generateDeviceID() string {
 	return deviceIDPrefix + string(buf[:])
 }
 
-// timestampFormatPool - Pool for reusable timestamp format buffers
-// Optimized: reduces allocations in timestamp formatting
-var timestampFormatPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 0, 32)
-	},
-}
-
-// writeHistoryLog - Write entry to history file (optimized: direct byte slice construction)
-// Optimized: eliminates strings.Builder overhead by using direct byte slice construction
-// Uses a single pre-allocated buffer to avoid multiple allocations
-func (s *WebSocketServer) writeHistoryLog(entryType, content string) {
-	if s.historyFile == nil {
-		return
-	}
-
-	// Get timestamp buffer from pool
-	tsBuf := timestampFormatPool.Get().([]byte)
-	defer timestampFormatPool.Put(tsBuf)
-	tsBuf = tsBuf[:0] // Reset
-	tsBuf = time.Now().AppendFormat(tsBuf, "2006-01-02 15:04:05")
-
-	// Pre-calculate total size for single allocation
-	// Format: "[2006-01-02 15:04:05] [type] content\n"
-	totalLen := len(tsBuf) + len(entryType) + len(content) + 10 // 10 for brackets, spaces, newline
-
-	// Get line buffer from pool (reduces allocations)
-	lineBuf := forwardStreamBufPool.Get().(*[]byte)
-	defer forwardStreamBufPool.Put(lineBuf)
-
-	// Pre-allocate if needed
-	if cap(*lineBuf) < totalLen {
-		*lineBuf = make([]byte, 0, totalLen)
-	}
-	*lineBuf = (*lineBuf)[:0] // Reset length
-
-	// Build log entry in single buffer (avoids strings.Builder overhead)
-	*lineBuf = append(*lineBuf, '[')
-	*lineBuf = append(*lineBuf, tsBuf...)
-	*lineBuf = append(*lineBuf, "] ["...)
-	*lineBuf = append(*lineBuf, entryType...)
-	*lineBuf = append(*lineBuf, "] "...)
-	*lineBuf = append(*lineBuf, content...)
-	*lineBuf = append(*lineBuf, '\n')
-
-	// Write with error handling (non-blocking, log but don't fail)
-	if _, err := s.historyFile.Write(*lineBuf); err != nil {
-		util.DebugLog("[DEBUG] writeHistoryLog: failed to write: %v", err)
-	}
-}
-
-// queueInputWithLogging - Helper to queue input with history logging
+// queueInputWithLogging - Helper to queue input (purely in-memory, no file logging)
 // Enhanced: non-blocking queue send with overflow protection, queue depth tracking
 // Optimized: single atomic operation for CLI start check (avoids double-check pattern)
 func (s *WebSocketServer) queueInputWithLogging(entryType, content string) {
-	// Log to history file first
-	if s.historyFile != nil {
-		s.writeHistoryLog(entryType, content)
-	}
-
 	// Non-blocking send to input queue (prevents deadlock if queue is full)
 	inputMsg := InputMessage{
 		Content: content,

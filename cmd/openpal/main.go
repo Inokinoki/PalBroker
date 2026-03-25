@@ -37,7 +37,6 @@ var (
 	capabilities = flag.String("capabilities", "", "comma-separated list of capabilities")
 	supportsACP  = flag.Bool("supports-acp", false, "CLI supports ACP protocol")
 	supportsJSON = flag.Bool("supports-json", false, "CLI supports JSON stream output")
-	saveHistory  = flag.Bool("save-history", false, "save CLI interaction history to file")
 	envFile      = flag.String("env-file", ".env", "path to .env file")
 	showVersion  = flag.Bool("version", false, "show version and build info")
 )
@@ -155,7 +154,7 @@ func main() {
 	}
 
 	// Start WebSocket server (CLI not started yet)
-	wsServer := server.NewWebSocketServer(stateMgr, id, cliAdapter, *saveHistory, *sessionDir)
+	wsServer := server.NewWebSocketServer(stateMgr, id, cliAdapter, *sessionDir)
 	port, err := wsServer.Start(*portFlag)
 	if err != nil {
 		log.Fatalf("Failed to start WebSocket server on %s: %v", *portFlag, err)

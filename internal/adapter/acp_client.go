@@ -82,10 +82,17 @@ type ACPClient struct {
 	started             bool              // Track if client has been started
 	notificationHandler func(*ACPMessage) // Per-instance notification handler
 	customCLIPath       string            // Custom CLI path (optional)
+	sessionStore        *ACPSessionStore  // SQLite session persistence
+	sessionDir          string            // Directory for session storage
 }
 
 // NewACPClient Create ACP client
 func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
+	return NewACPClientWithSessionDir(provider, customCLIPath, "")
+}
+
+// NewACPClientWithSessionDir Create ACP client with session persistence directory
+func NewACPClientWithSessionDir(provider, customCLIPath, sessionDir string) (*ACPClient, error) {
 	var cmd *exec.Cmd
 	var cmdName string
 
@@ -120,6 +127,7 @@ func NewACPClient(provider, customCLIPath string) (*ACPClient, error) {
 		cmd:           cmd,
 		cmdName:       cmdName, // Store command name for better error messages
 		customCLIPath: customCLIPath,
+		sessionDir:    sessionDir,
 		stdin:         nil, // Will be set in Start()
 		stdout:        nil, // Will be set in Start()
 		seq:           0,
@@ -176,6 +184,29 @@ func (c *ACPClient) Start() error {
 		util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
 	}
 
+	// Initialize session store for persistence (if sessionDir is set)
+	if c.sessionDir != "" {
+		var err error
+		c.sessionStore, err = NewACPSessionStore(c.sessionDir, c.provider)
+		if err != nil {
+			util.DebugLog("[DEBUG] ACP session store init failed: %v", err)
+			// Non-fatal: continue without persistence
+		} else {
+			util.DebugLog("[DEBUG] ACP session store initialized for provider=%s", c.provider)
+		}
+	}
+
+	// Set up notification handler to record session data
+	if c.sessionStore != nil {
+		c.notificationHandler = func(msg *ACPMessage) {
+			if msg.Method == "session/update" && c.sessionID != "" {
+				if err := c.sessionStore.RecordSession(c.sessionID, msg); err != nil {
+					util.DebugLog("[DEBUG] ACP session record failed: %v", err)
+				}
+			}
+		}
+	}
+
 	// Mark as started BEFORE releasing lock (to prevent re-entrancy during sendRequest)
 	c.started = true
 	c.mu.Unlock()
@@ -230,6 +261,14 @@ func (c *ACPClient) NewSession(cwd string, mcpServers []interface{}) (string, er
 
 	util.DebugLog("[DEBUG] NewSession created: %s", result.SessionID)
 	c.sessionID = result.SessionID
+
+	// Record session creation in SQLite
+	if c.sessionStore != nil {
+		if err := c.sessionStore.RecordContent(result.SessionID, "session_created", "New ACP session created"); err != nil {
+			util.DebugLog("[DEBUG] Failed to record session creation: %v", err)
+		}
+	}
+
 	return result.SessionID, nil
 }
 
@@ -299,6 +338,14 @@ func (c *ACPClient) Stop() error {
 			return fmt.Errorf("kill ACP process (PID=%d): %w", c.cmd.Process.Pid, err)
 		}
 	}
+
+	// Close session store
+	if c.sessionStore != nil {
+		if err := c.sessionStore.Close(); err != nil {
+			util.DebugLog("[DEBUG] ACP session store close failed: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -308,6 +355,20 @@ func (c *ACPClient) Pid() int {
 		return c.cmd.Process.Pid
 	}
 	return 0
+}
+
+// GetSessionID - Get the current session ID (for recovery)
+func (c *ACPClient) GetSessionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessionID
+}
+
+// GetSessionStore - Get the session store (for recovery)
+func (c *ACPClient) GetSessionStore() *ACPSessionStore {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessionStore
 }
 
 // SetNotificationHandler - Set callback for notifications (called when notifications arrive during request)
