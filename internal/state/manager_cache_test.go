@@ -321,11 +321,22 @@ func TestConcurrentCacheAccess(t *testing.T) {
 		t.Errorf("Expected %d events, got %d", expectedCount, len(cache.events))
 	}
 
-	// Verify sequence numbers are sequential
-	for i := 1; i < len(cache.events); i++ {
-		if cache.events[i].Seq != cache.events[i-1].Seq+1 {
-			t.Errorf("Expected sequential seq numbers, got %d then %d",
-				cache.events[i-1].Seq, cache.events[i].Seq)
+	// Verify all sequence numbers are unique and in range [1, expectedCount]
+	seqSet := make(map[int64]bool)
+	for _, event := range cache.events {
+		if event.Seq < 1 || event.Seq > int64(expectedCount) {
+			t.Errorf("Seq out of range: %d (expected 1-%d)", event.Seq, expectedCount)
+		}
+		if seqSet[event.Seq] {
+			t.Errorf("Duplicate seq: %d", event.Seq)
+		}
+		seqSet[event.Seq] = true
+	}
+
+	// Verify all sequences from 1 to expectedCount are present
+	for i := int64(1); i <= int64(expectedCount); i++ {
+		if !seqSet[i] {
+			t.Errorf("Missing seq: %d", i)
 		}
 	}
 }

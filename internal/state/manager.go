@@ -1,12 +1,9 @@
 package state
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,6 +76,8 @@ type Manager struct {
 	mu          sync.RWMutex            // Protects task state operations
 	cacheMu     sync.RWMutex            // Separate mutex for cache operations (reduces contention)
 	outputCache map[string]*outputCache // Cache output by taskID
+	devices     map[string]*Device      // In-memory device map (key: taskID:deviceID)
+	taskStates  map[string]*TaskState   // In-memory task states (key: taskID)
 
 	// Cache configuration (configurable via env vars)
 	maxEventsPerTask int           // Max events per task (default: 500)
@@ -156,6 +155,8 @@ func NewManager(sessionDir string) *Manager {
 	m := &Manager{
 		sessionDir:       sessionDir,
 		outputCache:      make(map[string]*outputCache),
+		devices:          make(map[string]*Device),
+		taskStates:       make(map[string]*TaskState),
 		maxEventsPerTask: maxEvents,
 		minEventsPerTask: maxEvents / 10, // 10% of max
 		maxTotalMemory:   int64(maxMemoryMB) * 1024 * 1024,
@@ -261,15 +262,13 @@ func (m *Manager) cleanupLoop() {
 	}
 }
 
-// CreateTask Create task
+// CreateTask Create task (in-memory only)
 func (m *Manager) CreateTask(taskID, provider string) error {
-	dir := filepath.Join(m.sessionDir, taskID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	now := time.Now().UnixMilli() // Single time.Now() call for both timestamps
-	state := TaskState{
+	now := time.Now().UnixMilli()
+	state := &TaskState{
 		TaskID:    taskID,
 		Provider:  provider,
 		Status:    "running",
@@ -278,34 +277,37 @@ func (m *Manager) CreateTask(taskID, provider string) error {
 		Seq:       0,
 	}
 
-	return m.saveState(taskID, &state)
+	m.taskStates[taskID] = state
+	return nil
 }
 
-// LoadState LoadTask state
+// LoadState LoadTask state (in-memory only)
 func (m *Manager) LoadState(taskID string) (*TaskState, error) {
-	data, err := os.ReadFile(filepath.Join(m.sessionDir, taskID, "state.json"))
-	if err != nil {
-		return nil, err
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	state, exists := m.taskStates[taskID]
+	if !exists {
+		return nil, os.ErrNotExist
 	}
 
-	var state TaskState
-	return &state, json.Unmarshal(data, &state)
+	return state, nil
 }
 
-// UpdateStatus - Update task state
+// UpdateStatus - Update task state (in-memory only)
 func (m *Manager) UpdateStatus(taskID, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, err := m.LoadState(taskID)
-	if err != nil {
-		return err
+	state, exists := m.taskStates[taskID]
+	if !exists {
+		return os.ErrNotExist
 	}
 
 	state.Status = status
 	state.UpdatedAt = time.Now().UnixMilli()
 
-	return m.saveState(taskID, state)
+	return nil
 }
 
 // NextSeq Get next sequence number
@@ -320,17 +322,13 @@ func (m *Manager) nextSeqWithTime(taskID string, now int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, err := m.LoadState(taskID)
-	if err != nil {
-		return 0, err
+	state, exists := m.taskStates[taskID]
+	if !exists {
+		return 0, os.ErrNotExist
 	}
 
 	state.Seq++
 	state.UpdatedAt = now
-
-	if err := m.saveState(taskID, state); err != nil {
-		return 0, err
-	}
 
 	return state.Seq, nil
 }
@@ -410,53 +408,42 @@ func (m *Manager) updateCache(taskID string, event Event) {
 	atomic.AddInt64(&m.stats.totalUpdates, 1)
 }
 
-// AddDevice Add device
+// AddDevice Add device (in-memory only)
 func (m *Manager) AddDevice(taskID, deviceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	devices, err := m.loadDevices(taskID)
-	if err != nil {
-		devices = []Device{}
-	}
+	key := taskID + ":" + deviceID
+	now := time.Now().UnixMilli()
 
-	now := time.Now().UnixMilli() // Single time.Now() call for all timestamps
-
-	// CheckIfExist
-	for i, d := range devices {
-		if d.DeviceID == deviceID {
-			devices[i].LastActive = now
-			return m.saveDevices(taskID, devices)
+	if device, exists := m.devices[key]; exists {
+		device.LastActive = now
+	} else {
+		m.devices[key] = &Device{
+			DeviceID:    deviceID,
+			ConnectedAt: now,
+			LastActive:  now,
+			LastSeq:     0,
 		}
 	}
 
-	// AddNewDevice
-	devices = append(devices, Device{
-		DeviceID:    deviceID,
-		ConnectedAt: now,
-		LastActive:  now,
-		LastSeq:     0,
-	})
-
-	return m.saveDevices(taskID, devices)
+	return nil
 }
 
-// UpdateDeviceSeq - Update device last read sequence
+// UpdateDeviceSeq - Update device last read sequence (in-memory only)
 func (m *Manager) UpdateDeviceSeq(taskID, deviceID string, seq int64) error {
-	devices, err := m.loadDevices(taskID)
-	if err != nil {
-		return err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := taskID + ":" + deviceID
+	now := time.Now().UnixMilli()
+
+	if device, exists := m.devices[key]; exists {
+		device.LastSeq = seq
+		device.LastActive = now
 	}
 
-	now := time.Now().UnixMilli() // Single time.Now() call for all updates
-	for i, d := range devices {
-		if d.DeviceID == deviceID {
-			devices[i].LastSeq = seq
-			devices[i].LastActive = now
-		}
-	}
-
-	return m.saveDevices(taskID, devices)
+	return nil
 }
 
 // GetIncrementalOutput Get incremental output (purely in-memory with CLI session recovery)
@@ -593,65 +580,17 @@ func (m *Manager) populateCache(taskID string, events []Event) {
 	}
 }
 
-// ListTasks List all tasks
+// ListTasks List all tasks (in-memory only)
 func (m *Manager) ListTasks() ([]string, error) {
-	entries, err := os.ReadDir(m.sessionDir)
-	if err != nil {
-		return nil, err
-	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	var tasks []string
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "task_") {
-			tasks = append(tasks, e.Name())
-		}
+	for taskID := range m.taskStates {
+		tasks = append(tasks, taskID)
 	}
 
 	return tasks, nil
-}
-
-func (m *Manager) saveState(taskID string, state *TaskState) error {
-	// Use json.Marshal instead of MarshalIndent for better performance
-	// State files are primarily machine-read; human readability is secondary
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(
-		filepath.Join(m.sessionDir, taskID, "state.json"),
-		data,
-		0644,
-	)
-}
-
-func (m *Manager) loadDevices(taskID string) ([]Device, error) {
-	path := filepath.Join(m.sessionDir, taskID, "devices.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Device{}, nil
-		}
-		return nil, err
-	}
-
-	var devices []Device
-	return devices, json.Unmarshal(data, &devices)
-}
-
-func (m *Manager) saveDevices(taskID string, devices []Device) error {
-	// Use json.Marshal instead of MarshalIndent for better performance
-	// Device files are primarily machine-read; human readability is secondary
-	data, err := json.Marshal(devices)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(
-		filepath.Join(m.sessionDir, taskID, "devices.json"),
-		data,
-		0644,
-	)
 }
 
 // cacheEntry - Temporary struct for LRU sorting (stack-allocatable)
