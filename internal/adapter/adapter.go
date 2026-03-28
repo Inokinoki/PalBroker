@@ -37,14 +37,30 @@ type CLIProcess struct {
 	Pid    int
 }
 
+func (c *CLIProcess) closePipes() {
+	if c.Stdin != nil {
+		c.Stdin.Close()
+		c.Stdin = nil
+	}
+	if c.Stdout != nil {
+		c.Stdout.Close()
+		c.Stdout = nil
+	}
+	if c.Stderr != nil {
+		c.Stderr.Close()
+		c.Stderr = nil
+	}
+}
+
 // Stop - Stop CLI with graceful shutdown (SIGINT) and timeout fallback
 func (c *CLIProcess) Stop() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
+		c.closePipes()
 		return nil
 	}
 
 	if err := c.Cmd.Process.Signal(os.Interrupt); err != nil {
-		util.DebugLog("[DEBUG] CLI Stop: interrupt failed: %v, forcing kill", err)
+		util.WarnLog("[WARN] CLI Stop: interrupt failed: %v, forcing kill", err)
 		return c.forceKill()
 	}
 
@@ -53,6 +69,7 @@ func (c *CLIProcess) Stop() error {
 
 	select {
 	case err := <-done:
+		c.closePipes()
 		return err
 	case <-time.After(3 * time.Second):
 		return c.forceKill()
@@ -62,6 +79,7 @@ func (c *CLIProcess) Stop() error {
 // forceKill - Force kill the CLI process and clean up resources
 func (c *CLIProcess) forceKill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
+		c.closePipes()
 		return nil
 	}
 
@@ -69,9 +87,7 @@ func (c *CLIProcess) forceKill() error {
 		return fmt.Errorf("force kill failed: %w", err)
 	}
 
-	if c.Stdin != nil {
-		c.Stdin.Close()
-	}
+	c.closePipes()
 
 	// Wait for process exit (500ms timeout)
 	done := make(chan error, 1)
@@ -165,7 +181,8 @@ func NewAdapter(provider, workDir string) *Manager {
 	// CLI will be started on-demand when start_task is received
 	if supportsACP(provider) {
 		// Pass empty customCLIPath - will be set later via SetCLIPath if needed
-		acpClient, err := NewACPClient(provider, "")
+		// Use workDir as session directory for SQLite persistence
+		acpClient, err := NewACPClientWithSessionDir(provider, "", workDir)
 		if err == nil {
 			// Create session info but don't start the process yet
 			return &Manager{
@@ -273,6 +290,14 @@ func supportsACP(provider string) bool {
 	}
 }
 
+// GetACPClient - Get the ACP client (if using ACP mode)
+func (m *Manager) GetACPClient() (interface{}, bool) {
+	if m.acpClient != nil {
+		return m.acpClient, true
+	}
+	return nil, false
+}
+
 // Start Start - Start CLI
 func (m *Manager) Start() (*CLIProcess, error) {
 	// ACP mode
@@ -345,10 +370,10 @@ func (m *Manager) GetCapabilities() []string {
 }
 
 // ClaudeAdapter - Claude Code adapter
+// Session state is managed by Claude Code itself - we only cache session ID in memory
 type ClaudeAdapter struct {
 	BaseAdapter
-	sessionDir     string           // Session directory for this task
-	sessionManager *session.Manager // Session manager for persistence
+	sessionManager *session.Manager // In-memory session cache
 	sessionID      string           // Current session ID
 	sessionMu      sync.RWMutex     // Protects sessionID
 }
@@ -361,15 +386,18 @@ func NewClaudeAdapter(config *CLIConfig) *ClaudeAdapter {
 	}
 }
 
-// SetSessionDir - Set session directory for this adapter
+// SetSessionDir - Set session directory and initialize in-memory session cache
+// Note: sessionDir is kept for API compatibility but not used for file storage
+// Session state is managed by Claude Code itself
 func (a *ClaudeAdapter) SetSessionDir(sessionDir, taskID string) {
-	a.sessionDir = sessionDir
+	// Initialize in-memory session manager (sessionDir ignored for file operations)
 	a.sessionManager = session.NewManager(sessionDir, taskID, "claude")
 
-	// Load existing session ID if available
+	// Load existing session ID from in-memory cache
+	// Note: Session persistence is now handled by Claude Code's native session management
 	if sessionID, err := a.sessionManager.Load(); err == nil && sessionID != "" {
 		a.sessionID = sessionID
-		util.DebugLog("[DEBUG] ClaudeAdapter: loaded existing session: %s", sessionID)
+		util.DebugLog("[DEBUG] ClaudeAdapter: loaded existing session from cache: %s", sessionID)
 	}
 }
 
@@ -428,7 +456,7 @@ func (a *ClaudeAdapter) ExtractSessionID(line string) string {
 	return ""
 }
 
-// UpdateSessionID - Update session ID from output and save to file
+// UpdateSessionID - Update session ID from output and save to in-memory cache
 func (a *ClaudeAdapter) UpdateSessionID(line string) {
 	sessionID := a.ExtractSessionID(line)
 	if sessionID == "" {
@@ -440,14 +468,21 @@ func (a *ClaudeAdapter) UpdateSessionID(line string) {
 	a.sessionID = sessionID
 	a.sessionMu.Unlock()
 
-	// Save to file if session ID changed
+	// Save to in-memory cache if session ID changed
 	if sessionID != oldSessionID && a.sessionManager != nil {
 		if err := a.sessionManager.Save(sessionID); err != nil {
-			util.DebugLog("[DEBUG] ClaudeAdapter: failed to save session ID: %v", err)
+			util.WarnLog("[WARN] ClaudeAdapter: failed to save session ID: %v", err)
 		} else {
 			util.DebugLog("[DEBUG] ClaudeAdapter: saved session ID: %s", sessionID)
 		}
 	}
+}
+
+// GetSessionID - Get the current session ID (for recovery)
+func (a *ClaudeAdapter) GetSessionID() string {
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.sessionID
 }
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
@@ -926,12 +961,12 @@ func (a *CopilotAdapter) GetCapabilities() []string {
 }
 
 // GeminiAdapter - Gemini CLI adapter
+// Session state is managed by Gemini itself - we only cache session ID in memory
 type GeminiAdapter struct {
 	BaseAdapter
-	sessionDir     string
-	sessionManager *session.Manager
-	sessionID      string
-	sessionMu      sync.RWMutex
+	sessionManager *session.Manager // In-memory session cache
+	sessionID      string           // Current session ID
+	sessionMu      sync.RWMutex     // Protects sessionID
 }
 
 func NewGeminiAdapter(config *CLIConfig) *GeminiAdapter {
@@ -942,14 +977,18 @@ func NewGeminiAdapter(config *CLIConfig) *GeminiAdapter {
 	}
 }
 
-// SetSessionDir - Set session directory for this adapter
+// SetSessionDir - Set session directory and initialize in-memory session cache
+// Note: sessionDir is kept for API compatibility but not used for file storage
+// Session state is managed by Gemini itself
 func (a *GeminiAdapter) SetSessionDir(sessionDir, taskID string) {
-	a.sessionDir = sessionDir
+	// Initialize in-memory session manager (sessionDir ignored for file operations)
 	a.sessionManager = session.NewManager(sessionDir, taskID, "gemini")
 
+	// Load existing session ID from in-memory cache
+	// Note: Session persistence is now handled by Gemini's native session management
 	if sessionID, err := a.sessionManager.Load(); err == nil && sessionID != "" {
 		a.sessionID = sessionID
-		util.DebugLog("[DEBUG] GeminiAdapter: loaded existing session: %s", sessionID)
+		util.DebugLog("[DEBUG] GeminiAdapter: loaded existing session from cache: %s", sessionID)
 	}
 }
 

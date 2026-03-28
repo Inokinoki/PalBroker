@@ -130,10 +130,16 @@ func TestAddOutput(t *testing.T) {
 		t.Fatalf("Failed to add output: %v", err)
 	}
 
-	// Verify output file exists
-	outputFile := filepath.Join(mgr.sessionDir, taskID, "output.jsonl")
-	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Error("Expected output.jsonl to exist")
+	// Verify cache is updated (purely in-memory, no file persistence)
+	mgr.cacheMu.RLock()
+	cache, exists := mgr.outputCache[taskID]
+	mgr.cacheMu.RUnlock()
+
+	if !exists {
+		t.Error("Expected cache to exist for task")
+	}
+	if len(cache.events) != 1 {
+		t.Errorf("Expected 1 event in cache, got %d", len(cache.events))
 	}
 
 	// Verify sequence updated
@@ -158,16 +164,25 @@ func TestAddDevice(t *testing.T) {
 		t.Fatalf("Failed to add device: %v", err)
 	}
 
-	// Verify device added
-	devicesFile := filepath.Join(mgr.sessionDir, taskID, "devices.json")
-	if _, err := os.Stat(devicesFile); os.IsNotExist(err) {
-		t.Error("Expected devices.json to exist")
+	// Verify device added to memory
+	key := taskID + ":" + deviceID
+	device, exists := mgr.devices[key]
+	if !exists {
+		t.Error("Expected device to be added to memory")
+	}
+	if device.DeviceID != deviceID {
+		t.Errorf("Expected deviceID=%s, got %s", deviceID, device.DeviceID)
 	}
 
 	// Add same device again (should update, not duplicate)
 	err = mgr.AddDevice(taskID, deviceID)
 	if err != nil {
 		t.Fatalf("Failed to update device: %v", err)
+	}
+
+	// Verify still only one device in memory
+	if len(mgr.devices) != 1 {
+		t.Errorf("Expected 1 device, got %d", len(mgr.devices))
 	}
 }
 
@@ -188,23 +203,18 @@ func TestUpdateDeviceSeq(t *testing.T) {
 		t.Fatalf("Failed to update device seq: %v", err)
 	}
 
-	// Verify sequence updated（ViaReadingFile）
-	devices, _ := mgr.loadDevices(taskID)
-	found := false
-	for _, d := range devices {
-		if d.DeviceID == deviceID {
-			found = true
-			if d.LastSeq != 100 {
-				t.Errorf("Expected LastSeq=100, got %d", d.LastSeq)
-			}
-			if d.LastActive == 0 {
-				t.Error("Expected LastActive to be set")
-			}
-		}
-	}
-
-	if !found {
+	// Verify sequence updated in memory
+	key := taskID + ":" + deviceID
+	device, exists := mgr.devices[key]
+	if !exists {
 		t.Error("Device not found")
+	} else {
+		if device.LastSeq != 100 {
+			t.Errorf("Expected LastSeq=100, got %d", device.LastSeq)
+		}
+		if device.LastActive == 0 {
+			t.Error("Expected LastActive to be set")
+		}
 	}
 }
 
