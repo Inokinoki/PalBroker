@@ -25,15 +25,6 @@ func hasAPIKey(t *testing.T, envVars ...string) bool {
 	return false
 }
 
-// skipIfNoCLI - Skip test if CLI is not available
-func skipIfNoCLI(t *testing.T, cli string) {
-	t.Helper()
-	cmd := exec.Command("which", cli)
-	if err := cmd.Run(); err != nil {
-		t.Skipf("Skipping: %s CLI not found in PATH", cli)
-	}
-}
-
 // TestClaude_ToolCalling - Test Claude Code tool calling functionality
 func TestClaude_ToolCalling(t *testing.T) {
 	skipIfNoCLI(t, "claude")
