@@ -538,13 +538,11 @@ func (m *Manager) getFromCache(taskID string, fromSeq int64) []Event {
 
 	// Update lastAccess outside read lock (best-effort for LRU)
 	now := time.Now()
-	if now.Sub(cache.lastAccess) > 5*time.Second {
-		m.cacheMu.Lock()
-		if cache, exists := m.outputCache[taskID]; exists && now.Sub(cache.lastAccess) > 5*time.Second {
-			cache.lastAccess = now
-		}
-		m.cacheMu.Unlock()
+	m.cacheMu.Lock()
+	if cache, exists := m.outputCache[taskID]; exists {
+		cache.lastAccess = now
 	}
+	m.cacheMu.Unlock()
 
 	atomic.AddInt64(&m.stats.totalHits, 1)
 	return result
