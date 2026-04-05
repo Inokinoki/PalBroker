@@ -350,16 +350,10 @@ func TestOpenCode_ToolCalling(t *testing.T) {
 	// Give it a moment to process
 	time.Sleep(2 * time.Second)
 
-	// Check if process is still running (it should be)
-	ps, _ := os.FindProcess(cmd.Process.Pid)
-	if ps != nil {
-		proc, _ := ps.Wait()
-		if proc.Exited() {
-			t.Logf("OpenCode process exited (this is expected if auth is not configured)")
-		} else {
-			t.Log("OpenCode process still running - ACP protocol working correctly")
-		}
-	}
+	// Note: We don't check process exit status here because:
+	// 1. The important parts (initialize, session/new, session/prompt) have all succeeded
+	// 2. ps.Wait() blocks indefinitely on PTY-connected processes
+	// 3. The deferred cmd.Process.Kill() and cmd.Wait() will clean up properly
 
 	t.Log("OpenCode ACP test completed successfully")
 }
