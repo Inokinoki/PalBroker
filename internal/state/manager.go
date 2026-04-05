@@ -537,6 +537,8 @@ func (m *Manager) getFromCache(taskID string, fromSeq int64) []Event {
 	copy(result, remaining)
 
 	// Update lastAccess outside read lock (best-effort for LRU)
+	// Note: Must release RLock before acquiring Lock to avoid deadlock
+	m.cacheMu.RUnlock()
 	now := time.Now()
 	m.cacheMu.Lock()
 	if cache, exists := m.outputCache[taskID]; exists {
