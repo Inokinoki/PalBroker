@@ -371,6 +371,15 @@ func (c *ACPClient) Pid() int {
 	return 0
 }
 
+// GetReader - Get the shared buffered reader for ACP output
+// Used by the server to forward ACP output without creating a competing reader
+func (c *ACPClient) GetReader() io.Reader {
+	if c.reader != nil {
+		return c.reader
+	}
+	return c.stdout
+}
+
 // GetSessionID - Get the current session ID (for recovery)
 func (c *ACPClient) GetSessionID() string {
 	c.mu.Lock()
@@ -474,6 +483,17 @@ func (c *ACPClient) sendRequest(method string, params interface{}, result interf
 
 		if respID, ok := idVal.(float64); !ok || respID != float64(id) {
 			continue
+		}
+
+		// Skip echoed requests: some providers (e.g., opencode) echo the request
+		// back before sending the actual response. An echoed request has a "method"
+		// field but no "result" or "error" field.
+		if _, hasMethod := response["method"]; hasMethod {
+			if _, hasResult := response["result"]; !hasResult {
+				if _, hasError := response["error"]; !hasError {
+					continue
+				}
+			}
 		}
 
 		if errMsg, ok := response["error"]; ok && errMsg != nil {
