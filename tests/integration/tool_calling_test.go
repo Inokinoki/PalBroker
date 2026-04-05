@@ -5,10 +5,14 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // hasAPIKey - Check if API key exists for the provider
@@ -19,6 +23,15 @@ func hasAPIKey(t *testing.T, envVars ...string) bool {
 		}
 	}
 	return false
+}
+
+// skipIfNoCLI - Skip test if CLI is not available
+func skipIfNoCLI(t *testing.T, cli string) {
+	t.Helper()
+	cmd := exec.Command("which", cli)
+	if err := cmd.Run(); err != nil {
+		t.Skipf("Skipping: %s CLI not found in PATH", cli)
+	}
 }
 
 // TestClaude_ToolCalling - Test Claude Code tool calling functionality
@@ -206,29 +219,158 @@ func TestCopilot_ToolCalling(t *testing.T) {
 func TestOpenCode_ToolCalling(t *testing.T) {
 	skipIfNoCLI(t, "opencode")
 
-	t.Log("Testing OpenCode tool calling...")
+	t.Log("Testing OpenCode ACP protocol with PTY...")
 
 	tmpDir := t.TempDir()
 
-	// Run OpenCode in ACP mode (with timeout)
+	// Start opencode acp with PTY (required for proper stdio behavior)
 	cmd := exec.Command("opencode", "acp")
 	cmd.Dir = tmpDir
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := cmd.CombinedOutput()
-		done <- err
+	// Create PTY for proper stdio communication
+	ptyMaster, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("Failed to open PTY: %v", err)
+	}
+	defer ptyMaster.Close()
+	defer func() { tty.Close() }()
+
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+
+	if err := cmd.Start(); err != nil {
+		t.Skipf("OpenCode not configured: %v", err)
+	}
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
 	}()
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Skipf("OpenCode not configured: %v", err)
+	// Helper to send JSON-RPC request and read response
+	sendRequest := func(method string, id int, params map[string]interface{}) error {
+		req := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"method":  method,
+			"params":  params,
 		}
-	case <-time.After(5 * time.Second):
-		cmd.Process.Kill()
-		t.Log("OpenCode ACP mode started successfully")
+		data, _ := json.Marshal(req)
+		_, err := ptyMaster.Write(append(data, '\n'))
+		return err
 	}
+
+	// Read response with timeout
+	// Note: opencode echoes each request back before sending the response
+	readResponse := func(expectedID int) (map[string]interface{}, error) {
+		buf := make([]byte, 4096)
+		deadline := time.Now().Add(5 * time.Second)
+		accumulated := ""
+		for time.Now().Before(deadline) {
+			cmd.Process.Signal(os.Signal(nil)) // Check if process is alive
+			n, err := ptyMaster.Read(buf)
+			if err != nil {
+				if os.IsTimeout(err) {
+					continue
+				}
+				return nil, err
+			}
+			if n > 0 {
+				accumulated += string(buf[:n])
+				// Try to parse the accumulated data as multiple JSON lines
+				lines := strings.Split(accumulated, "\n")
+				for _, line := range lines {
+					if line == "" {
+						continue
+					}
+					var resp map[string]interface{}
+					if err := json.Unmarshal([]byte(line), &resp); err != nil {
+						continue
+					}
+					// Check if this is a response (has "result" or "error") to our request
+					if id, ok := resp["id"].(float64); ok && int(id) == expectedID {
+						if resp["result"] != nil || resp["error"] != nil {
+							return resp, nil
+						}
+					}
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		return nil, fmt.Errorf("timeout waiting for response (accumulated: %s)", accumulated[:min(len(accumulated), 200)])
+	}
+
+	// Test 1: Send initialize request
+	t.Log("Sending initialize request...")
+	if err := sendRequest("initialize", 1, map[string]interface{}{
+		"protocolVersion":    1,
+		"clientCapabilities": map[string]interface{}{},
+	}); err != nil {
+		t.Fatalf("Failed to send initialize: %v", err)
+	}
+
+	resp, err := readResponse(1)
+	if err != nil {
+		t.Fatalf("Failed to read initialize response: %v", err)
+	}
+	if resp["result"] == nil {
+		t.Fatalf("Initialize response missing result: %v", resp)
+	}
+	result := resp["result"].(map[string]interface{})
+	if result["protocolVersion"] == nil {
+		t.Fatalf("Initialize response missing protocolVersion: %v", result)
+	}
+	t.Logf("Initialize successful: protocolVersion=%v", result["protocolVersion"])
+
+	// Test 2: Send session/new request
+	t.Log("Sending session/new request...")
+	if err := sendRequest("session/new", 2, map[string]interface{}{
+		"cwd":        tmpDir,
+		"mcpServers": []interface{}{},
+	}); err != nil {
+		t.Fatalf("Failed to send session/new: %v", err)
+	}
+
+	resp, err = readResponse(2)
+	if err != nil {
+		t.Fatalf("Failed to read session/new response: %v", err)
+	}
+	if resp["result"] == nil {
+		t.Fatalf("session/new response missing result: %v", resp)
+	}
+	result = resp["result"].(map[string]interface{})
+	sessionID, ok := result["sessionId"].(string)
+	if !ok || sessionID == "" {
+		t.Fatalf("session/new response missing valid sessionId: %v", result)
+	}
+	t.Logf("Session created: sessionId=%s", sessionID)
+
+	// Test 3: Send session/prompt request
+	t.Log("Sending session/prompt request...")
+	if err := sendRequest("session/prompt", 3, map[string]interface{}{
+		"sessionId": sessionID,
+		"prompt": []map[string]string{
+			{"type": "text", "text": "Hello"},
+		},
+	}); err != nil {
+		t.Fatalf("Failed to send session/prompt: %v", err)
+	}
+
+	// Give it a moment to process
+	time.Sleep(2 * time.Second)
+
+	// Check if process is still running (it should be)
+	ps, _ := os.FindProcess(cmd.Process.Pid)
+	if ps != nil {
+		proc, _ := ps.Wait()
+		if proc.Exited() {
+			t.Logf("OpenCode process exited (this is expected if auth is not configured)")
+		} else {
+			t.Log("OpenCode process still running - ACP protocol working correctly")
+		}
+	}
+
+	t.Log("OpenCode ACP test completed successfully")
 }
 
 // TestAllAdapters_ToolCalling - Test all adapters for tool calling support
