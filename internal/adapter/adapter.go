@@ -298,6 +298,16 @@ func (m *Manager) GetACPClient() (interface{}, bool) {
 	return nil, false
 }
 
+// GetACPReader - Get the ACP client's shared buffered reader
+// Returns the reader that has already consumed handshake data, preventing
+// data loss when forwarding ACP output. Returns nil if not in ACP mode.
+func (m *Manager) GetACPReader() io.Reader {
+	if m.acpClient != nil {
+		return m.acpClient.GetReader()
+	}
+	return nil
+}
+
 // Start Start - Start CLI
 func (m *Manager) Start() (*CLIProcess, error) {
 	// ACP mode

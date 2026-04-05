@@ -559,6 +559,9 @@ func (s *WebSocketServer) ForwardOutput(stdout, stderr io.Reader) {
 
 // forwardStream - Forward CLI output to state manager and broadcast channel
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
+	if reader == nil {
+		return
+	}
 	scanner := bufio.NewScanner(reader)
 	const maxCapacity = 1024 * 1024
 	scanner.Buffer(make([]byte, 4096), maxCapacity)
@@ -1037,6 +1040,15 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		// Claude -p mode: wait for process to complete
 		s.ForwardOutput(cli.Stdout, cli.Stderr)
 		s.cli = nil // Clear CLI reference after completion
+	} else if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
+		// ACP mode: use the ACP client's shared bufio.Reader to avoid competing
+		// readers on the same PTY file descriptor. The ACP client's reader may
+		// have buffered data from the handshake that must not be lost.
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.forwardStream(s.cliAdapter.GetACPReader(), "chunk")
+		}()
 	} else {
 		// Other modes: forward in background
 		go s.ForwardOutput(cli.Stdout, cli.Stderr)
