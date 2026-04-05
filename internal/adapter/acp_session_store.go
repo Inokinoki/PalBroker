@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"openpal/internal/util"
 )
 
@@ -49,7 +49,7 @@ func NewACPSessionStore(sessionDir, provider string) (*ACPSessionStore, error) {
 
 	dbPath := filepath.Join(sessionDir, fmt.Sprintf("acp_sessions_%s.db", provider))
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

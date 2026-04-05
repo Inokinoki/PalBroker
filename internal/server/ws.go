@@ -1074,8 +1074,20 @@ func (s *WebSocketServer) processInputQueue() {
 				// Output is forwarded by ForwardOutput called in startCLI
 			} else if s.cliAdapter.GetMode() == adapter.ModeACP {
 				// ACP mode: send via ACP protocol (persistent connection)
-				if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
-					s.errorCh <- fmt.Errorf("send input: %w", err)
+				// Check if CLI is running, if not start it first
+				s.mu.RLock()
+				cliAlive := s.cli != nil && s.cli.Stdin != nil
+				s.mu.RUnlock()
+
+				if !cliAlive {
+					// CLI not running, start it first
+					if err := s.startCLI(inputMsg.Content); err != nil {
+						s.errorCh <- fmt.Errorf("start cli: %w", err)
+					}
+				} else {
+					if err := s.cliAdapter.SendACPPrompt(inputMsg.Content); err != nil {
+						s.errorCh <- fmt.Errorf("send input: %w", err)
+					}
 				}
 			} else {
 				// Text mode with persistent CLI: send via stdin

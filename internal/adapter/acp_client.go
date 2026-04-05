@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/creack/pty"
 	"openpal/internal/util"
 )
 
@@ -52,6 +54,8 @@ type ACPClient struct {
 	stdin               io.WriteCloser
 	stdout              io.ReadCloser
 	reader              *bufio.Reader // Reusable buffered reader for stdout
+	ptyMaster           *os.File      // PTY master (for providers requiring PTY)
+	tty                 *os.File      // PTY slave (attached to cmd stdin/stdout)
 	sessionID           string
 	seq                 int64
 	mu                  sync.Mutex
@@ -130,34 +134,55 @@ func (c *ACPClient) Start() error {
 	// Start the process if not already started
 	if c.stdin == nil || c.stdout == nil {
 		var err error
-		c.stdin, err = c.cmd.StdinPipe()
-		if err != nil {
-			c.mu.Unlock()
-			return fmt.Errorf("ACP stdin pipe failed (provider=%s): %w", c.provider, err)
-		}
 
-		c.stdout, err = c.cmd.StdoutPipe()
-		if err != nil {
-			c.stdin.Close()
-			c.mu.Unlock()
-			return fmt.Errorf("ACP stdout pipe failed (provider=%s): %w", c.provider, err)
-		}
-
-		// Create reusable buffered reader for efficient reading
-		c.reader = bufio.NewReader(c.stdout)
-
-		if err := c.cmd.Start(); err != nil {
-			c.stdin.Close()
-			c.stdout.Close()
-			c.mu.Unlock()
-			// Provide actionable error message
-			if err.Error() == "executable file not found in $PATH" {
-				return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
+		// OpenCode requires PTY for proper stdio communication
+		if c.provider == "opencode" {
+			// Use PTY for opencode (required for proper stdio handling)
+			c.ptyMaster, err = pty.Start(c.cmd)
+			if err != nil {
+				c.mu.Unlock()
+				// Provide actionable error message
+				if err.Error() == "executable file not found in $PATH" {
+					return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
+				}
+				return fmt.Errorf("ACP PTY start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
 			}
-			return fmt.Errorf("ACP process start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
-		}
+			// Use PTY master for both reading and writing
+			c.stdin = c.ptyMaster
+			c.stdout = c.ptyMaster
+			c.reader = bufio.NewReader(c.ptyMaster)
+			util.DebugLog("[DEBUG] ACP process started with PTY: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
+		} else {
+			// Use stdin/stdout pipes for other providers (copilot)
+			c.stdin, err = c.cmd.StdinPipe()
+			if err != nil {
+				c.mu.Unlock()
+				return fmt.Errorf("ACP stdin pipe failed (provider=%s): %w", c.provider, err)
+			}
 
-		util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
+			c.stdout, err = c.cmd.StdoutPipe()
+			if err != nil {
+				c.stdin.Close()
+				c.mu.Unlock()
+				return fmt.Errorf("ACP stdout pipe failed (provider=%s): %w", c.provider, err)
+			}
+
+			// Create reusable buffered reader for efficient reading
+			c.reader = bufio.NewReader(c.stdout)
+
+			if err := c.cmd.Start(); err != nil {
+				c.stdin.Close()
+				c.stdout.Close()
+				c.mu.Unlock()
+				// Provide actionable error message
+				if err.Error() == "executable file not found in $PATH" {
+					return fmt.Errorf("ACP CLI not found: '%s' is not installed or not in PATH (provider=%s). Install the CLI or check PATH configuration", c.cmdName, c.provider)
+				}
+				return fmt.Errorf("ACP process start failed (provider=%s, cmd=%s): %w", c.provider, c.cmdName, err)
+			}
+
+			util.DebugLog("[DEBUG] ACP process started: PID=%d, provider=%s, cmd=%s", c.cmd.Process.Pid, c.provider, c.cmdName)
+		}
 	}
 
 	// Initialize session store for persistence (if sessionDir is set)
@@ -309,12 +334,22 @@ func (c *ACPClient) Stop() error {
 		}
 	}
 
-	if c.stdin != nil {
+	// Close PTY master if using PTY mode
+	if c.ptyMaster != nil {
+		if err := c.ptyMaster.Close(); err != nil {
+			util.WarnLog("[WARN] Failed to close PTY master: %v", err)
+		}
+		c.ptyMaster = nil
+	}
+
+	// Close stdin if not using PTY mode
+	if c.stdin != nil && c.stdin != c.ptyMaster {
 		c.stdin.Close()
 		c.stdin = nil
 	}
 
-	if c.stdout != nil {
+	// Close stdout if not using PTY mode
+	if c.stdout != nil && c.stdout != c.ptyMaster {
 		c.stdout.Close()
 		c.stdout = nil
 	}
