@@ -1,14 +1,11 @@
 package session_handler
 
 import (
-	"bufio"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -80,7 +77,7 @@ func (p *codexProvider) findFromSQLite(sessionID string) (string, ResolutionMeta
 
 		var rolloutPath string
 		err = db.QueryRow(`SELECT rollout_path FROM threads WHERE id = ?`, sessionID).Scan(&rolloutPath)
-		db.Close()
+		db.Close() // Close immediately after query (single-query pattern)
 
 		if err == nil && rolloutPath != "" {
 			if _, statErr := os.Stat(rolloutPath); statErr == nil {
@@ -128,30 +125,14 @@ func (p *codexProvider) findRolloutFile(dir, sessionID string) (string, Resoluti
 //
 //	{"type": "item.completed", "item": {"type": "agent_message", "text": "..."}}
 func (p *codexProvider) ReadMessages(thread *ResolvedThread) ([]ThreadMessage, error) {
-	f, err := os.Open(thread.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	defer f.Close()
-
 	var messages []ThreadMessage
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var entry map[string]interface{}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
-
+	err := readJSONLFile(thread.Path, func(_ string, entry map[string]interface{}) {
 		msg := extractCodexMessage(entry)
 		if msg != nil {
 			messages = append(messages, *msg)
 		}
-	}
-	return messages, scanner.Err()
+	})
+	return messages, err
 }
 
 func extractCodexMessage(entry map[string]interface{}) *ThreadMessage {

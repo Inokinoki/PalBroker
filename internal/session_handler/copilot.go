@@ -1,8 +1,6 @@
 package session_handler
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,29 +66,14 @@ func (p *copilotProvider) Resolve(sessionID string) (*ResolvedThread, error) {
 //	{"type": "assistant.message_delta", "data": {"deltaContent": "..."}}
 //	{"type": "assistant.message", "data": {"content": "..."}}
 func (p *copilotProvider) ReadMessages(thread *ResolvedThread) ([]ThreadMessage, error) {
-	f, err := os.Open(thread.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	defer f.Close()
-
 	var messages []ThreadMessage
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var entry map[string]interface{}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
+	err := readJSONLFile(thread.Path, func(_ string, entry map[string]interface{}) {
 		msg := extractCopilotMessage(entry)
 		if msg != nil {
 			messages = append(messages, *msg)
 		}
-	}
-	return messages, scanner.Err()
+	})
+	return messages, err
 }
 
 func extractCopilotMessage(entry map[string]interface{}) *ThreadMessage {

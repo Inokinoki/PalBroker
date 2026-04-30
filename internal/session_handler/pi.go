@@ -99,35 +99,19 @@ func (p *piProvider) fileMatchesSession(path, sessionID string) bool {
 //	{"type": "session", "version": 3, "id": "..."}
 //	{"type": "message", "message": {"role": "user|assistant", "content": [{"type":"text","text":"..."}]}}
 func (p *piProvider) ReadMessages(thread *ResolvedThread) ([]ThreadMessage, error) {
-	f, err := os.Open(thread.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	defer f.Close()
-
 	var messages []ThreadMessage
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var entry map[string]interface{}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
-
+	err := readJSONLFile(thread.Path, func(_ string, entry map[string]interface{}) {
 		eventType, _ := entry["type"].(string)
 		if eventType != "message" {
-			continue // Skip session headers and other events
+			return // Skip session headers and other events
 		}
 
 		msg := extractPiMessage(entry)
 		if msg != nil {
 			messages = append(messages, *msg)
 		}
-	}
-	return messages, scanner.Err()
+	})
+	return messages, err
 }
 
 func extractPiMessage(entry map[string]interface{}) *ThreadMessage {

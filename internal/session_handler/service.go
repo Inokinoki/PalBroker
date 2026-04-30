@@ -148,22 +148,24 @@ func queryCodexThreads(p *codexProvider) ([]ThreadInfo, error) {
 		if err != nil {
 			continue
 		}
-		rows, err := db.Query(`SELECT id, rollout_path FROM threads`)
-		if err != nil {
-			db.Close()
-			continue
-		}
-		for rows.Next() {
-			var id, rollout string
-			if rows.Scan(&id, &rollout) == nil {
-				threads = append(threads, ThreadInfo{
-					SessionID: id,
-					Provider:  ProviderCodex,
-					Path:      rollout,
-				})
+		func() {
+			defer db.Close()
+			rows, err := db.Query(`SELECT id, rollout_path FROM threads`)
+			if err != nil {
+				return
 			}
-		}
-		rows.Close()
+			defer rows.Close()
+			for rows.Next() {
+				var id, rollout string
+				if rows.Scan(&id, &rollout) == nil {
+					threads = append(threads, ThreadInfo{
+						SessionID: id,
+						Provider:  ProviderCodex,
+						Path:      rollout,
+					})
+				}
+			}
+		}()
 		db.Close()
 	}
 

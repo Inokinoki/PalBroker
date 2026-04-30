@@ -6,7 +6,9 @@
 package session_handler
 
 import (
+	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -192,4 +194,29 @@ func selectLatestFile(files []string) string {
 		return files[0]
 	}
 	return best
+}
+
+// readJSONLFile reads a JSONL file and calls fn for each parsed JSON line.
+// Handles file open/close, line trimming, empty line skipping, and JSON parsing.
+// Returns the scanner error if any.
+func readJSONLFile(path string, fn func(line string, entry map[string]interface{})) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry map[string]interface{}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		fn(line, entry)
+	}
+	return scanner.Err()
 }
