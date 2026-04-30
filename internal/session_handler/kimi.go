@@ -21,7 +21,7 @@ func (p *kimiProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryKimiThreads(p)
 }
 
-func newKimiProvider(rootDir string) *kimiProvider {
+func newKimiProvider(rootDir string) Provider {
 	if rootDir == "" {
 		if dir := os.Getenv("KIMI_SHARE_DIR"); dir != "" {
 			rootDir = dir
@@ -30,6 +30,10 @@ func newKimiProvider(rootDir string) *kimiProvider {
 		}
 	}
 	return &kimiProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderKimi, newKimiProvider)
 }
 
 func (p *kimiProvider) Kind() ProviderKind { return ProviderKimi }

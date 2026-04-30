@@ -21,11 +21,15 @@ func (p *codexProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryCodexThreads(p)
 }
 
-func newCodexProvider(rootDir string) *codexProvider {
+func newCodexProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".codex")
 	}
 	return &codexProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderCodex, newCodexProvider)
 }
 
 func (p *codexProvider) Kind() ProviderKind { return ProviderCodex }

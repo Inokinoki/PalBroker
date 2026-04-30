@@ -19,11 +19,15 @@ func (p *claudeProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryClaudeThreads(p)
 }
 
-func newClaudeProvider(rootDir string) *claudeProvider {
+func newClaudeProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".claude")
 	}
 	return &claudeProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderClaude, newClaudeProvider)
 }
 
 func (p *claudeProvider) Kind() ProviderKind { return ProviderClaude }

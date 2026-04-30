@@ -81,65 +81,46 @@ type ThreadInfo struct {
 	ModTime   time.Time    `json:"mod_time"`
 }
 
+// providerFactory creates a Provider given a rootDir.
+type providerFactory func(rootDir string) Provider
+
+// providerRegistry maps ProviderKind to its factory.
+// Each provider registers itself via init() — adding a new provider only
+// requires creating its file and adding a single registerProvider call.
+var providerRegistry = map[ProviderKind]providerFactory{}
+
+// registerProvider adds a provider to the global registry.
+func registerProvider(kind ProviderKind, factory providerFactory) {
+	providerRegistry[kind] = factory
+}
+
 // NewProvider creates a Provider for the given kind.
 // rootDir overrides the default data directory for the provider (empty = auto-detect).
 func NewProvider(kind ProviderKind, rootDir string) (Provider, error) {
-	switch kind {
-	case ProviderClaude:
-		return newClaudeProvider(rootDir), nil
-	case ProviderCodex:
-		return newCodexProvider(rootDir), nil
-	case ProviderCopilot:
-		return newCopilotProvider(rootDir), nil
-	case ProviderCursor:
-		return newCursorProvider(rootDir), nil
-	case ProviderGemini:
-		return newGeminiProvider(rootDir), nil
-	case ProviderAmp:
-		return newAmpProvider(rootDir), nil
-	case ProviderKimi:
-		return newKimiProvider(rootDir), nil
-	case ProviderOpenCode:
-		return newOpenCodeProvider(rootDir), nil
-	case ProviderPi:
-		return newPiProvider(rootDir), nil
-	default:
+	factory, ok := providerRegistry[kind]
+	if !ok {
 		return nil, fmt.Errorf("unsupported provider: %s", kind)
 	}
+	return factory(rootDir), nil
 }
 
 // ProviderKinds returns all supported provider kinds.
 func ProviderKinds() []ProviderKind {
-	return []ProviderKind{
-		ProviderClaude, ProviderCodex, ProviderCopilot, ProviderCursor,
-		ProviderGemini, ProviderAmp, ProviderKimi, ProviderOpenCode, ProviderPi,
+	kinds := make([]ProviderKind, 0, len(providerRegistry))
+	for k := range providerRegistry {
+		kinds = append(kinds, k)
 	}
+	return kinds
 }
 
 // ParseProviderKind parses a provider name (case-insensitive).
 func ParseProviderKind(s string) (ProviderKind, bool) {
-	switch ProviderKind(strings.ToLower(s)) {
-	case ProviderClaude:
-		return ProviderClaude, true
-	case ProviderCodex:
-		return ProviderCodex, true
-	case ProviderCopilot:
-		return ProviderCopilot, true
-	case ProviderCursor:
-		return ProviderCursor, true
-	case ProviderGemini:
-		return ProviderGemini, true
-	case ProviderAmp:
-		return ProviderAmp, true
-	case ProviderKimi:
-		return ProviderKimi, true
-	case ProviderOpenCode:
-		return ProviderOpenCode, true
-	case ProviderPi:
-		return ProviderPi, true
-	default:
+	kind := ProviderKind(strings.ToLower(s))
+	_, ok := providerRegistry[kind]
+	if !ok {
 		return "", false
 	}
+	return kind, ok
 }
 
 // homeDir returns the user's home directory or a fallback.

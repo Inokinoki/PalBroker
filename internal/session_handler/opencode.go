@@ -22,11 +22,15 @@ func (p *openCodeProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return p.QueryThreads()
 }
 
-func newOpenCodeProvider(rootDir string) *openCodeProvider {
+func newOpenCodeProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(xdgDataHome(), "opencode")
 	}
 	return &openCodeProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderOpenCode, newOpenCodeProvider)
 }
 
 func (p *openCodeProvider) Kind() ProviderKind { return ProviderOpenCode }

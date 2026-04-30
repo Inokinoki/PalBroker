@@ -19,7 +19,7 @@ func (p *geminiProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryGeminiThreads(p)
 }
 
-func newGeminiProvider(rootDir string) *geminiProvider {
+func newGeminiProvider(rootDir string) Provider {
 	if rootDir == "" {
 		for _, env := range []string{"GEMINI_CLI_HOME"} {
 			if dir := os.Getenv(env); dir != "" {
@@ -32,6 +32,10 @@ func newGeminiProvider(rootDir string) *geminiProvider {
 		}
 	}
 	return &geminiProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderGemini, newGeminiProvider)
 }
 
 func (p *geminiProvider) Kind() ProviderKind { return ProviderGemini }

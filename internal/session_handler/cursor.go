@@ -39,6 +39,12 @@ func newCursorProvider(rootDir string) *cursorProvider {
 	return &cursorProvider{rootDir: rootDir}
 }
 
+func init() {
+	registerProvider(ProviderCursor, func(rootDir string) Provider {
+		return newCursorProvider(rootDir)
+	})
+}
+
 func (p *cursorProvider) Kind() ProviderKind { return ProviderCursor }
 
 func (p *cursorProvider) Resolve(sessionID string) (*ResolvedThread, error) {

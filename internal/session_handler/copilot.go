@@ -17,11 +17,15 @@ func (p *copilotProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryCopilotThreads(p)
 }
 
-func newCopilotProvider(rootDir string) *copilotProvider {
+func newCopilotProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".copilot")
 	}
 	return &copilotProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderCopilot, newCopilotProvider)
 }
 
 func (p *copilotProvider) Kind() ProviderKind { return ProviderCopilot }

@@ -19,7 +19,7 @@ func (p *piProvider) QueryProviderThreads() ([]ThreadInfo, error) {
 	return queryPiThreads(p)
 }
 
-func newPiProvider(rootDir string) *piProvider {
+func newPiProvider(rootDir string) Provider {
 	if rootDir == "" {
 		if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {
 			rootDir = dir
@@ -28,6 +28,10 @@ func newPiProvider(rootDir string) *piProvider {
 		}
 	}
 	return &piProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderPi, newPiProvider)
 }
 
 func (p *piProvider) Kind() ProviderKind { return ProviderPi }
