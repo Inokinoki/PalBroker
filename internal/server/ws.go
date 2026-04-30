@@ -556,6 +556,9 @@ var forwardStreamBufPool = sync.Pool{
 // Purely in-memory: no file persistence, all data cached in state manager
 // Enhanced 2026-03-19: Set provider and session ID in state manager for recovery
 func (s *WebSocketServer) forwardStream(reader io.Reader, eventType string) {
+	if reader == nil {
+		return
+	}
 	scanner := bufio.NewScanner(reader)
 	const maxCapacity = 1024 * 1024
 
@@ -1075,6 +1078,23 @@ func (s *WebSocketServer) startCLI(taskContent string) error {
 		if err := s.cliAdapter.SendACPPrompt(taskContent); err != nil {
 			return fmt.Errorf("failed to send prompt: %w", err)
 		}
+	}
+
+	// Start forwarding output (blocking for Claude -p mode, non-blocking for others)
+	if s.cliAdapter != nil && s.cliAdapter.GetProvider() == "claude" {
+		// Claude -p mode: wait for process to complete
+		s.ForwardOutput(cli.Stdout, cli.Stderr)
+		s.cli = nil // Clear CLI reference after completion
+	} else if s.cliAdapter != nil && s.cliAdapter.GetMode() == adapter.ModeACP {
+		// ACP mode: use the ACP client's shared bufio.Reader to avoid competing
+		// readers on the same PTY file descriptor. The ACP client's reader may
+		// have buffered data from the handshake that must not be lost.
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.forwardStream(s.cliAdapter.GetACPReader(), "chunk")
+		}()
+
 	} else {
 		// Text/Stream mode: send prompt via stdin
 		// For Claude, use EncodeStdinMessage for stream-json format
