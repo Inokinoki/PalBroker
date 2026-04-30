@@ -46,8 +46,8 @@ type ampSession struct {
 }
 
 type ampMessage struct {
-	Role    string        `json:"role"`
-	Content []ampContent  `json:"content"`
+	Role    string       `json:"role"`
+	Content []ampContent `json:"content"`
 }
 
 type ampContent struct {

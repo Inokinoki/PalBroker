@@ -36,7 +36,7 @@ type kimiMeta struct {
 }
 
 type kimiWorkDir struct {
-	Path         string `json:"path"`
+	Path          string `json:"path"`
 	LastSessionID string `json:"last_session_id"`
 }
 

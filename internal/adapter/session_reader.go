@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"openpal/internal/util"
 	"openpal/internal/session_handler"
+	"openpal/internal/util"
 )
 
 // SessionReader - Interface for reading session data from CLI agent storage

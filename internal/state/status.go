@@ -58,11 +58,11 @@ func (m *StatusManager) Initialize(questID, provider string, pid int) error {
 	now := time.Now().UnixMilli()
 
 	m.status = &AgentStatus{
-		State:     "initializing",
-		Provider:  provider,
-		QuestID:   questID,
-		PID:       pid,
-		StartTime: now,
+		State:      "initializing",
+		Provider:   provider,
+		QuestID:    questID,
+		PID:        pid,
+		StartTime:  now,
 		UpdateTime: now,
 	}
 

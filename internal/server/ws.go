@@ -1336,8 +1336,8 @@ func handleGetSessionHistory(s *WebSocketServer, msg *ClientMessage, client *Web
 	sessionID, _ := msg.Data["session_id"].(string)
 	if sessionID == "" {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": "session_id is required"},
+			"type": "error",
+			"data": map[string]interface{}{"message": "session_id is required"},
 		})
 		return
 	}
@@ -1351,8 +1351,8 @@ func handleGetSessionHistory(s *WebSocketServer, msg *ClientMessage, client *Web
 	}
 	if provider == "" {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": "provider is required (no active CLI)"},
+			"type": "error",
+			"data": map[string]interface{}{"message": "provider is required (no active CLI)"},
 		})
 		return
 	}
@@ -1361,8 +1361,8 @@ func handleGetSessionHistory(s *WebSocketServer, msg *ClientMessage, client *Web
 	reader := adapter.CreateSessionReader(provider, sessionDir)
 	if reader == nil {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": fmt.Sprintf("unsupported provider: %s", provider)},
+			"type": "error",
+			"data": map[string]interface{}{"message": fmt.Sprintf("unsupported provider: %s", provider)},
 		})
 		return
 	}
@@ -1370,8 +1370,8 @@ func handleGetSessionHistory(s *WebSocketServer, msg *ClientMessage, client *Web
 	events, err := reader.ReadSession(sessionID)
 	if err != nil {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": fmt.Sprintf("failed to read session: %v", err)},
+			"type": "error",
+			"data": map[string]interface{}{"message": fmt.Sprintf("failed to read session: %v", err)},
 		})
 		return
 	}
@@ -1421,8 +1421,8 @@ func handleListSessions(s *WebSocketServer, msg *ClientMessage, client *WebSocke
 	}
 	if provider == "" {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": "provider is required (no active CLI)"},
+			"type": "error",
+			"data": map[string]interface{}{"message": "provider is required (no active CLI)"},
 		})
 		return
 	}
@@ -1431,8 +1431,8 @@ func handleListSessions(s *WebSocketServer, msg *ClientMessage, client *WebSocke
 	reader := adapter.CreateSessionReader(provider, sessionDir)
 	if reader == nil {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": fmt.Sprintf("unsupported provider: %s", provider)},
+			"type": "error",
+			"data": map[string]interface{}{"message": fmt.Sprintf("unsupported provider: %s", provider)},
 		})
 		return
 	}
@@ -1440,8 +1440,8 @@ func handleListSessions(s *WebSocketServer, msg *ClientMessage, client *WebSocke
 	sessions, err := reader.ListSessions()
 	if err != nil {
 		s.sendToClient(client.DeviceID, map[string]interface{}{
-			"type":  "error",
-			"data":  map[string]interface{}{"message": fmt.Sprintf("failed to list sessions: %v", err)},
+			"type": "error",
+			"data": map[string]interface{}{"message": fmt.Sprintf("failed to list sessions: %v", err)},
 		})
 		return
 	}
@@ -1453,7 +1453,7 @@ func handleListSessions(s *WebSocketServer, msg *ClientMessage, client *WebSocke
 	}
 
 	type sessionInfo struct {
-		SessionID string                       `json:"session_id"`
+		SessionID string                   `json:"session_id"`
 		Metadata  *adapter.SessionMetadata `json:"metadata,omitempty"`
 	}
 

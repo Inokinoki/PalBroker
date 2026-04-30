@@ -83,11 +83,11 @@ func (p *geminiProvider) Resolve(sessionID string) (*ResolvedThread, error) {
 
 // geminiSession represents the Gemini JSON session format.
 type geminiSession struct {
-	SessionID    string         `json:"sessionId"`
-	ProjectHash  string         `json:"projectHash"`
-	StartTime    string         `json:"startTime"`
-	LastUpdated  string         `json:"lastUpdated"`
-	Messages     []geminiMsg    `json:"messages"`
+	SessionID   string      `json:"sessionId"`
+	ProjectHash string      `json:"projectHash"`
+	StartTime   string      `json:"startTime"`
+	LastUpdated string      `json:"lastUpdated"`
+	Messages    []geminiMsg `json:"messages"`
 }
 
 type geminiMsg struct {
