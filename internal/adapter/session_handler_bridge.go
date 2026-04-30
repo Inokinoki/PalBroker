@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"fmt"
-	"time"
 
 	"openpal/internal/session_handler"
 )
@@ -41,7 +40,7 @@ func (r *sessionHandlerReader) ReadSession(sessionID string) ([]SessionEvent, er
 		events = append(events, SessionEvent{
 			Seq:       int64(i + 1),
 			Type:      string(msg.Role),
-			Timestamp: time.Now().UnixMilli(),
+			Timestamp: msg.Timestamp,
 			Data: map[string]interface{}{
 				"type":    string(msg.Role),
 				"content": msg.Text,

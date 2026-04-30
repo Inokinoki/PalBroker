@@ -19,6 +19,10 @@ type cursorProvider struct {
 	rootDir string // ~/.cursor
 }
 
+func (p *cursorProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryCursorThreads(p)
+}
+
 func newCursorProvider(rootDir string) *cursorProvider {
 	if rootDir == "" {
 		// Check CURSOR_DATA_DIR and CURSOR_CONFIG_DIR env vars
@@ -33,6 +37,12 @@ func newCursorProvider(rootDir string) *cursorProvider {
 		}
 	}
 	return &cursorProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderCursor, func(rootDir string) Provider {
+		return newCursorProvider(rootDir)
+	})
 }
 
 func (p *cursorProvider) Kind() ProviderKind { return ProviderCursor }

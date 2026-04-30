@@ -14,11 +14,19 @@ type ampProvider struct {
 	rootDir string // ~/.local/share/amp
 }
 
-func newAmpProvider(rootDir string) *ampProvider {
+func (p *ampProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryAmpThreads(p)
+}
+
+func newAmpProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(xdgDataHome(), "amp")
 	}
 	return &ampProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderAmp, newAmpProvider)
 }
 
 func (p *ampProvider) Kind() ProviderKind { return ProviderAmp }

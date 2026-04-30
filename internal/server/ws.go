@@ -100,25 +100,24 @@ type WebSocketClient struct {
 	ReconnectCount  int
 	mu              sync.RWMutex
 	writeMu         sync.Mutex // Protects WebSocket write operations
-	isClosed        bool
+	isClosed        atomic.Bool
 	reconnectCtx    context.Context
 	reconnectCancel context.CancelFunc
 }
 
 // IsClosed CheckClientIfAlreadyClose
 func (c *WebSocketClient) IsClosed() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.isClosed
+	return c.isClosed.Load()
 }
 
 // SetClosed MarkClienttoCloseState
 func (c *WebSocketClient) SetClosed() {
+	c.isClosed.Store(true)
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.isClosed = true
-	if c.reconnectCancel != nil {
-		c.reconnectCancel()
+	cancel := c.reconnectCancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -487,8 +486,8 @@ func (s *WebSocketServer) checkHeartbeat() {
 	// Phase 1: Snapshot clients to disconnect (minimize lock hold time)
 	s.mu.RLock()
 	for deviceID, client := range s.clients {
-		// Fast path: skip already closed clients (direct field access, no lock needed)
-		if client.isClosed {
+		// Fast path: skip already closed clients
+		if client.isClosed.Load() {
 			continue
 		}
 
@@ -982,7 +981,7 @@ func (s *WebSocketServer) sendPing(client *WebSocketClient) {
 			return
 		case <-ticker.C:
 			// Direct field access for hot path (avoid method call overhead)
-			if client.isClosed {
+			if client.isClosed.Load() {
 				return
 			}
 
@@ -1579,7 +1578,7 @@ func (s *WebSocketServer) broadcastToClients(event state.Event) {
 		}
 		s.mu.RUnlock()
 
-		if client.isClosed {
+		if client.isClosed.Load() {
 			return
 		}
 
@@ -1618,7 +1617,7 @@ func (s *WebSocketServer) broadcastToClients(event state.Event) {
 
 	// Snapshot active clients (minimize lock hold time)
 	for deviceID, client := range s.clients {
-		if !client.isClosed {
+		if !client.isClosed.Load() {
 			clients = append(clients, client)
 			deviceIDs = append(deviceIDs, deviceID)
 		}
@@ -1717,8 +1716,8 @@ func (s *WebSocketServer) sendToClient(deviceID string, data interface{}) {
 	// Protect write operations with mutex
 	client.writeMu.Lock()
 
-	// Direct field access (isClosed is protected by writeMu in this context)
-	if client.isClosed {
+	// Direct field access (atomic.Bool is lock-free)
+	if client.isClosed.Load() {
 		client.writeMu.Unlock()
 		return
 	}

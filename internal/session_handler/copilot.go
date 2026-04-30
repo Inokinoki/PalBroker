@@ -1,8 +1,6 @@
 package session_handler
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,11 +13,19 @@ type copilotProvider struct {
 	rootDir string // ~/.copilot
 }
 
-func newCopilotProvider(rootDir string) *copilotProvider {
+func (p *copilotProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryCopilotThreads(p)
+}
+
+func newCopilotProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".copilot")
 	}
 	return &copilotProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderCopilot, newCopilotProvider)
 }
 
 func (p *copilotProvider) Kind() ProviderKind { return ProviderCopilot }
@@ -64,29 +70,14 @@ func (p *copilotProvider) Resolve(sessionID string) (*ResolvedThread, error) {
 //	{"type": "assistant.message_delta", "data": {"deltaContent": "..."}}
 //	{"type": "assistant.message", "data": {"content": "..."}}
 func (p *copilotProvider) ReadMessages(thread *ResolvedThread) ([]ThreadMessage, error) {
-	f, err := os.Open(thread.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	defer f.Close()
-
 	var messages []ThreadMessage
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var entry map[string]interface{}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
+	err := readJSONLFile(thread.Path, func(_ string, entry map[string]interface{}) {
 		msg := extractCopilotMessage(entry)
 		if msg != nil {
 			messages = append(messages, *msg)
 		}
-	}
-	return messages, scanner.Err()
+	})
+	return messages, err
 }
 
 func extractCopilotMessage(entry map[string]interface{}) *ThreadMessage {

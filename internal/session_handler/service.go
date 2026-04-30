@@ -40,29 +40,12 @@ func QueryThreadsByProvider(kind ProviderKind) ([]ThreadInfo, error) {
 }
 
 // queryProviderThreads discovers sessions for a single provider.
+// Uses a ThreadQuerier interface to avoid unsafe type assertions.
 func queryProviderThreads(p Provider, kind ProviderKind) ([]ThreadInfo, error) {
-	switch kind {
-	case ProviderClaude:
-		return queryClaudeThreads(p.(*claudeProvider))
-	case ProviderCodex:
-		return queryCodexThreads(p.(*codexProvider))
-	case ProviderCopilot:
-		return queryCopilotThreads(p.(*copilotProvider))
-	case ProviderGemini:
-		return queryGeminiThreads(p.(*geminiProvider))
-	case ProviderAmp:
-		return queryAmpThreads(p.(*ampProvider))
-	case ProviderKimi:
-		return queryKimiThreads(p.(*kimiProvider))
-	case ProviderOpenCode:
-		return p.(*openCodeProvider).QueryThreads()
-	case ProviderPi:
-		return queryPiThreads(p.(*piProvider))
-	case ProviderCursor:
-		return queryCursorThreads(p.(*cursorProvider))
-	default:
-		return nil, nil
+	if qp, ok := p.(interface{ QueryProviderThreads() ([]ThreadInfo, error) }); ok {
+		return qp.QueryProviderThreads()
 	}
+	return nil, nil
 }
 
 // ResolveThread resolves a thread by provider and session ID.
@@ -165,22 +148,24 @@ func queryCodexThreads(p *codexProvider) ([]ThreadInfo, error) {
 		if err != nil {
 			continue
 		}
-		rows, err := db.Query(`SELECT id, rollout_path FROM threads`)
-		if err != nil {
-			db.Close()
-			continue
-		}
-		for rows.Next() {
-			var id, rollout string
-			if rows.Scan(&id, &rollout) == nil {
-				threads = append(threads, ThreadInfo{
-					SessionID: id,
-					Provider:  ProviderCodex,
-					Path:      rollout,
-				})
+		func() {
+			defer db.Close()
+			rows, err := db.Query(`SELECT id, rollout_path FROM threads`)
+			if err != nil {
+				return
 			}
-		}
-		rows.Close()
+			defer rows.Close()
+			for rows.Next() {
+				var id, rollout string
+				if rows.Scan(&id, &rollout) == nil {
+					threads = append(threads, ThreadInfo{
+						SessionID: id,
+						Provider:  ProviderCodex,
+						Path:      rollout,
+					})
+				}
+			}
+		}()
 		db.Close()
 	}
 

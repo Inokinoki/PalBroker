@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -19,11 +18,19 @@ type openCodeProvider struct {
 	rootDir string // ~/.local/share/opencode
 }
 
-func newOpenCodeProvider(rootDir string) *openCodeProvider {
+func (p *openCodeProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return p.QueryThreads()
+}
+
+func newOpenCodeProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(xdgDataHome(), "opencode")
 	}
 	return &openCodeProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderOpenCode, newOpenCodeProvider)
 }
 
 func (p *openCodeProvider) Kind() ProviderKind { return ProviderOpenCode }
@@ -206,11 +213,4 @@ func (p *openCodeProvider) QueryThreads() ([]ThreadInfo, error) {
 		})
 	}
 	return threads, rows.Err()
-}
-
-// sortMessages sorts by time_created.
-func sortMessages(msgs []ThreadMessage) {
-	sort.Slice(msgs, func(i, j int) bool {
-		return msgs[i].Role < msgs[j].Role
-	})
 }

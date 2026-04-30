@@ -15,11 +15,19 @@ type claudeProvider struct {
 	rootDir string // ~/.claude
 }
 
-func newClaudeProvider(rootDir string) *claudeProvider {
+func (p *claudeProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryClaudeThreads(p)
+}
+
+func newClaudeProvider(rootDir string) Provider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".claude")
 	}
 	return &claudeProvider{rootDir: rootDir}
+}
+
+func init() {
+	registerProvider(ProviderClaude, newClaudeProvider)
 }
 
 func (p *claudeProvider) Kind() ProviderKind { return ProviderClaude }
@@ -173,30 +181,14 @@ func (p *claudeProvider) fileContainsSessionID(path, sessionID string) bool {
 //
 //	{"type": "user|assistant|system", "message": {"role": "...", "content": [{"type":"text","text":"..."}]}}
 func (p *claudeProvider) ReadMessages(thread *ResolvedThread) ([]ThreadMessage, error) {
-	f, err := os.Open(thread.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	defer f.Close()
-
 	var messages []ThreadMessage
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var entry map[string]interface{}
-		if json.Unmarshal([]byte(line), &entry) != nil {
-			continue
-		}
-
+	err := readJSONLFile(thread.Path, func(_ string, entry map[string]interface{}) {
 		msg := extractClaudeMessage(entry)
 		if msg != nil {
 			messages = append(messages, *msg)
 		}
-	}
-	return messages, scanner.Err()
+	})
+	return messages, err
 }
 
 func extractClaudeMessage(entry map[string]interface{}) *ThreadMessage {
