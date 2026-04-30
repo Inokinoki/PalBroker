@@ -340,7 +340,7 @@ func TestAdapterCommandBuilder(t *testing.T) {
 				WorkDir:  "/workspace",
 				Task:     "Test",
 			},
-			wantArgs: []string{"-p", "--output-format", "stream-json"},
+			wantArgs: []string{"--output-format", "stream-json", "--input-format", "stream-json"},
 		},
 		{
 			name:     "codex_basic",

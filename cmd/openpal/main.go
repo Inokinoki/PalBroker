@@ -119,7 +119,7 @@ func main() {
 		log.Printf("Warning: failed to initialize status: %v", err)
 	}
 
-	// Save pal-broker PID
+	// Save PID to file (for slock daemon to find this process)
 	pidFile := filepath.Join(dir, "bridge.pid")
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		log.Printf("Warning: failed to write PID file: %v", err)
@@ -162,7 +162,7 @@ func main() {
 
 	log.Printf("WebSocket server listening on port %d", port)
 
-	// Save WebSocket port to file
+	// Save WebSocket port to file (for slock daemon to connect)
 	portFile := filepath.Join(dir, "ws_port")
 	if err := os.WriteFile(portFile, []byte(strconv.Itoa(port)), 0644); err != nil {
 		log.Fatalf("Failed to write port file %s: %v", portFile, err)

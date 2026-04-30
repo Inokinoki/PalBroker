@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"openpal/internal/session_handler"
 	"openpal/internal/util"
 )
 
@@ -830,7 +831,16 @@ func (r *geminiSessionReader) GetSessionMetadata(sessionID string) (*SessionMeta
 }
 
 // CreateSessionReader - Factory function to create a reader for a specific provider
+// Supports all session_handler providers: claude, codex, copilot, cursor, gemini, amp, kimi, opencode, pi
 func CreateSessionReader(provider, sessionDir string) SessionReader {
+	// Try session_handler-backed providers first (covers all 9 providers)
+	if kind, ok := session_handler.ParseProviderKind(provider); ok {
+		if reader := SessionHandlerReader(kind, sessionDir); reader != nil {
+			return reader
+		}
+	}
+
+	// Native implementations (used as fallback or when session_handler fails)
 	switch strings.ToLower(provider) {
 	case "claude":
 		return ClaudeSessionReader(sessionDir)
@@ -838,51 +848,7 @@ func CreateSessionReader(provider, sessionDir string) SessionReader {
 		return CodexSessionReader(sessionDir)
 	case "gemini":
 		return GeminiSessionReader(sessionDir)
-	case "copilot", "copilot-acp", "opencode":
-		// ACP providers use SQLite for session persistence
-		return ACPSessionReader(sessionDir, provider)
 	default:
 		return nil
 	}
-}
-
-// acpSessionReader - Reads ACP session data from SQLite
-// Supports Copilot and OpenCode ACP providers
-type acpSessionReader struct {
-	store    *ACPSessionStore
-	provider string
-}
-
-// ACPSessionReader creates a new ACP session reader
-func ACPSessionReader(sessionDir, provider string) SessionReader {
-	store, err := NewACPSessionStore(sessionDir, provider)
-	if err != nil {
-		util.WarnLog("[WARN] ACPSessionReader: failed to create store: %v", err)
-		return nil
-	}
-	return &acpSessionReader{
-		store:    store,
-		provider: provider,
-	}
-}
-
-func (r *acpSessionReader) ReadSession(sessionID string) ([]SessionEvent, error) {
-	if r.store == nil {
-		return nil, fmt.Errorf("session store not initialized")
-	}
-	return r.store.ReadSession(sessionID)
-}
-
-func (r *acpSessionReader) ListSessions() ([]string, error) {
-	if r.store == nil {
-		return []string{}, nil
-	}
-	return r.store.ListSessions()
-}
-
-func (r *acpSessionReader) GetSessionMetadata(sessionID string) (*SessionMetadata, error) {
-	if r.store == nil {
-		return nil, fmt.Errorf("session store not initialized")
-	}
-	return r.store.GetSessionMetadata(sessionID)
 }
