@@ -41,8 +41,9 @@ const (
 
 // ThreadMessage represents a single message in a conversation thread.
 type ThreadMessage struct {
-	Role MessageRole `json:"role"`
-	Text string      `json:"text"`
+	Role      MessageRole `json:"role"`
+	Text      string      `json:"text"`
+	Timestamp int64       `json:"timestamp,omitempty"` // Unix milliseconds, 0 if unknown
 }
 
 // ResolutionMeta contains metadata about how a thread was resolved.

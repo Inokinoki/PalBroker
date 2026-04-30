@@ -20,6 +20,10 @@ type codexProvider struct {
 	rootDir string // ~/.codex
 }
 
+func (p *codexProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryCodexThreads(p)
+}
+
 func newCodexProvider(rootDir string) *codexProvider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".codex")

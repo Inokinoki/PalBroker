@@ -17,6 +17,10 @@ type kimiProvider struct {
 	rootDir string // ~/.kimi
 }
 
+func (p *kimiProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryKimiThreads(p)
+}
+
 func newKimiProvider(rootDir string) *kimiProvider {
 	if rootDir == "" {
 		if dir := os.Getenv("KIMI_SHARE_DIR"); dir != "" {

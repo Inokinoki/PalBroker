@@ -778,6 +778,17 @@ func (m *Manager) CleanupCache() int {
 	atomic.AddInt64(&m.stats.evictions, int64(evicted))
 	atomic.StoreInt64(&m.stats.size, int64(len(m.outputCache)))
 
+	// Phase 3: Clean up taskStates and devices for evicted tasks
+	// This prevents unbounded memory growth from completed/stale tasks
+	m.mu.Lock()
+	for taskID := range m.taskStates {
+		if _, exists := m.outputCache[taskID]; !exists {
+			delete(m.taskStates, taskID)
+			delete(m.devices, taskID)
+		}
+	}
+	m.mu.Unlock()
+
 	return evicted
 }
 

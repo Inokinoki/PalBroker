@@ -15,6 +15,10 @@ type claudeProvider struct {
 	rootDir string // ~/.claude
 }
 
+func (p *claudeProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryClaudeThreads(p)
+}
+
 func newClaudeProvider(rootDir string) *claudeProvider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".claude")

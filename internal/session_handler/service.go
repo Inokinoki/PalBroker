@@ -40,29 +40,12 @@ func QueryThreadsByProvider(kind ProviderKind) ([]ThreadInfo, error) {
 }
 
 // queryProviderThreads discovers sessions for a single provider.
+// Uses a ThreadQuerier interface to avoid unsafe type assertions.
 func queryProviderThreads(p Provider, kind ProviderKind) ([]ThreadInfo, error) {
-	switch kind {
-	case ProviderClaude:
-		return queryClaudeThreads(p.(*claudeProvider))
-	case ProviderCodex:
-		return queryCodexThreads(p.(*codexProvider))
-	case ProviderCopilot:
-		return queryCopilotThreads(p.(*copilotProvider))
-	case ProviderGemini:
-		return queryGeminiThreads(p.(*geminiProvider))
-	case ProviderAmp:
-		return queryAmpThreads(p.(*ampProvider))
-	case ProviderKimi:
-		return queryKimiThreads(p.(*kimiProvider))
-	case ProviderOpenCode:
-		return p.(*openCodeProvider).QueryThreads()
-	case ProviderPi:
-		return queryPiThreads(p.(*piProvider))
-	case ProviderCursor:
-		return queryCursorThreads(p.(*cursorProvider))
-	default:
-		return nil, nil
+	if qp, ok := p.(interface{ QueryProviderThreads() ([]ThreadInfo, error) }); ok {
+		return qp.QueryProviderThreads()
 	}
+	return nil, nil
 }
 
 // ResolveThread resolves a thread by provider and session ID.

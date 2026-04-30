@@ -15,6 +15,10 @@ type piProvider struct {
 	rootDir string // ~/.pi/agent
 }
 
+func (p *piProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryPiThreads(p)
+}
+
 func newPiProvider(rootDir string) *piProvider {
 	if rootDir == "" {
 		if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {

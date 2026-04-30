@@ -15,6 +15,10 @@ type geminiProvider struct {
 	rootDir string // ~/.gemini
 }
 
+func (p *geminiProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryGeminiThreads(p)
+}
+
 func newGeminiProvider(rootDir string) *geminiProvider {
 	if rootDir == "" {
 		for _, env := range []string{"GEMINI_CLI_HOME"} {

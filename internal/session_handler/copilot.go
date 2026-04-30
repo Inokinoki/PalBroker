@@ -15,6 +15,10 @@ type copilotProvider struct {
 	rootDir string // ~/.copilot
 }
 
+func (p *copilotProvider) QueryProviderThreads() ([]ThreadInfo, error) {
+	return queryCopilotThreads(p)
+}
+
 func newCopilotProvider(rootDir string) *copilotProvider {
 	if rootDir == "" {
 		rootDir = filepath.Join(homeDir(), ".copilot")

@@ -91,34 +91,33 @@ func (m *StatusManager) UpdateAgentStatus(state string, cliPID int, wsPort int) 
 // UpdateProgress - Update task progress (in-memory only)
 func (m *StatusManager) UpdateProgress(progress int, action string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.progress.Progress = progress
 	m.progress.CurrentAction = action
 	m.progress.UpdateTime = time.Now().UnixMilli()
-	m.mu.Unlock()
 }
 
 // AddFileModified - Record a modified file (in-memory only)
 func (m *StatusManager) AddFileModified(filePath string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if _, exists := m.filesModified[filePath]; exists {
-		m.mu.Unlock()
 		return
 	}
 
 	m.filesModified[filePath] = struct{}{}
 	m.progress.FilesModified = append(m.progress.FilesModified, filePath)
 	m.progress.UpdateTime = time.Now().UnixMilli()
-	m.mu.Unlock()
 }
 
 // UpdateLastOutput - Update last output (in-memory only)
 func (m *StatusManager) UpdateLastOutput(output string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.progress.LastOutput = output
 	m.progress.LastOutputTime = time.Now().UnixMilli()
 	m.progress.UpdateTime = time.Now().UnixMilli()
-	m.mu.Unlock()
 }
 
 // SetCompleted - Mark task as completed
