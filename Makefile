@@ -37,13 +37,12 @@ help:
 	@echo "  all         Run build, test, lint, vet"
 	@echo ""
 
-# Build the binary (pure Go SQLite)
+# Build the binary
 build:
 	@echo "Building ${BINARY_NAME}..."
 	@echo "Version: ${VERSION}"
 	@echo "Go: ${GO_VERSION}"
 	@echo "Commit: ${GIT_COMMIT}"
-	@echo "SQLite: Pure Go (modernc.org/sqlite)"
 	@echo ""
 	CGO_ENABLED=0 go build ${LDFLAGS} -o ${BINARY_NAME} ./cmd/openpal
 	@echo ""

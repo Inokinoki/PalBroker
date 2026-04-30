@@ -37,30 +37,14 @@ type CLIProcess struct {
 	Pid    int
 }
 
-func (c *CLIProcess) closePipes() {
-	if c.Stdin != nil {
-		c.Stdin.Close()
-		c.Stdin = nil
-	}
-	if c.Stdout != nil {
-		c.Stdout.Close()
-		c.Stdout = nil
-	}
-	if c.Stderr != nil {
-		c.Stderr.Close()
-		c.Stderr = nil
-	}
-}
-
 // Stop - Stop CLI with graceful shutdown (SIGINT) and timeout fallback
 func (c *CLIProcess) Stop() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
-		c.closePipes()
 		return nil
 	}
 
 	if err := c.Cmd.Process.Signal(os.Interrupt); err != nil {
-		util.WarnLog("[WARN] CLI Stop: interrupt failed: %v, forcing kill", err)
+		util.DebugLog("[DEBUG] CLI Stop: interrupt failed: %v, forcing kill", err)
 		return c.forceKill()
 	}
 
@@ -69,7 +53,6 @@ func (c *CLIProcess) Stop() error {
 
 	select {
 	case err := <-done:
-		c.closePipes()
 		return err
 	case <-time.After(3 * time.Second):
 		return c.forceKill()
@@ -79,7 +62,6 @@ func (c *CLIProcess) Stop() error {
 // forceKill - Force kill the CLI process and clean up resources
 func (c *CLIProcess) forceKill() error {
 	if c.Cmd == nil || c.Cmd.Process == nil {
-		c.closePipes()
 		return nil
 	}
 
@@ -87,7 +69,9 @@ func (c *CLIProcess) forceKill() error {
 		return fmt.Errorf("force kill failed: %w", err)
 	}
 
-	c.closePipes()
+	if c.Stdin != nil {
+		c.Stdin.Close()
+	}
 
 	// Wait for process exit (500ms timeout)
 	done := make(chan error, 1)
@@ -182,7 +166,7 @@ func NewAdapter(provider, workDir string) *Manager {
 	if supportsACP(provider) {
 		// Pass empty customCLIPath - will be set later via SetCLIPath if needed
 		// Use workDir as session directory for SQLite persistence
-		acpClient, err := NewACPClientWithSessionDir(provider, "", workDir)
+		acpClient, err := NewACPClient(provider, "")
 		if err == nil {
 			// Create session info but don't start the process yet
 			return &Manager{
@@ -481,7 +465,7 @@ func (a *ClaudeAdapter) UpdateSessionID(line string) {
 	// Save to in-memory cache if session ID changed
 	if sessionID != oldSessionID && a.sessionManager != nil {
 		if err := a.sessionManager.Save(sessionID); err != nil {
-			util.WarnLog("[WARN] ClaudeAdapter: failed to save session ID: %v", err)
+			util.DebugLog("[DEBUG] ClaudeAdapter: failed to save session ID: %v", err)
 		} else {
 			util.DebugLog("[DEBUG] ClaudeAdapter: saved session ID: %s", sessionID)
 		}
@@ -496,11 +480,11 @@ func (a *ClaudeAdapter) GetSessionID() string {
 }
 
 func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
-	// Use -p (print) mode for non-interactive execution
-	// This allows us to use --output-format stream-json
+	// Persistent interactive mode with stream-json I/O
+	// Claude stays alive, receives user messages via stdin, sends responses via stdout
 	args := []string{
-		"-p",
 		"--output-format", "stream-json",
+		"--input-format", "stream-json",
 		"--verbose",
 	}
 
@@ -519,13 +503,42 @@ func (a *ClaudeAdapter) BuildCommand(config *CLIConfig) *exec.Cmd {
 		util.DebugLog("[DEBUG] ClaudeAdapter: resuming session %s", sessionID)
 	}
 
-	// Task is passed as argument in -p mode
-	if config.Task != "" {
-		args = append(args, config.Task)
-	}
+	// Note: task/prompt is NOT passed as arg; sent via stdin after process starts
 
 	cliPath := a.GetCLIPath("claude")
 	return exec.Command(cliPath, args...)
+}
+
+// EncodeStdinMessage - Encode a user message in Claude stream-json stdin format
+// This replaces the old -p mode argument passing with stdin-based interaction
+func (a *ClaudeAdapter) EncodeStdinMessage(text string) ([]byte, error) {
+	a.sessionMu.RLock()
+	sessionID := a.sessionID
+	a.sessionMu.RUnlock()
+
+	msg := map[string]interface{}{
+		"type": "user",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "text",
+					"text": text,
+				},
+			},
+		},
+	}
+	if sessionID != "" {
+		msg["session_id"] = sessionID
+	}
+
+	return json.Marshal(msg)
+}
+
+// SupportsStdinNotification - Claude supports receiving messages via stdin while running
+// This enables persistent process mode like ACP providers
+func (a *ClaudeAdapter) SupportsStdinNotification() bool {
+	return true
 }
 
 func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error) {
@@ -549,6 +562,12 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 		return result, nil
 
 	case "system":
+		// Extract session_id from init message
+		if subtype, ok := msg["subtype"].(string); ok && subtype == "init" {
+			if sid, ok := msg["session_id"].(string); ok && sid != "" {
+				a.UpdateSessionID(sid)
+			}
+		}
 		return map[string]interface{}{
 			"type":    "system",
 			"content": "Claude initialized",
@@ -563,6 +582,10 @@ func (a *ClaudeAdapter) ParseMessage(line string) (map[string]interface{}, error
 		}, nil
 
 	case "result":
+		// Turn completed - extract session_id for resume
+		if sid, ok := msg["session_id"].(string); ok && sid != "" {
+			a.UpdateSessionID(sid)
+		}
 		result, _ := msg["result"].(string)
 		return map[string]interface{}{
 			"type":    "result",
@@ -718,7 +741,28 @@ func (a *ClaudeAdapter) buildAndSendCommand(cmd string, params map[string]interf
 }
 
 func (a *ClaudeAdapter) SendCommand(cmd string, params map[string]interface{}) error {
+	// For Claude, send user messages via stream-json stdin format
+	if text, ok := params["content"].(string); ok && text != "" {
+		encoded, err := a.EncodeStdinMessage(text)
+		if err != nil {
+			return fmt.Errorf("encode stdin message failed: %w", err)
+		}
+		return a.buildAndSendRawCommand(append(encoded, '\n'))
+	}
 	return a.buildAndSendCommand(cmd, params)
+}
+
+// buildAndSendRawCommand - Write raw bytes to stdin (for pre-encoded messages)
+func (a *ClaudeAdapter) buildAndSendRawCommand(data []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.stdin == nil {
+		return fmt.Errorf("stdin not available")
+	}
+
+	_, err := a.stdin.Write(data)
+	return err
 }
 
 // Pre-allocated capability slices (read-only, zero allocations)
