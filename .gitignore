@@ -1,6 +1,5 @@
 # Build artifacts
 /openpal
-/openpal-*
 /ws-test
 dist/
 *.exe

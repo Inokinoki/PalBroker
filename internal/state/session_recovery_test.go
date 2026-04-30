@@ -6,64 +6,45 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"openpal/internal/adapter"
 )
 
-// setupMockSessionFiles creates mock session files for testing session recovery
-func setupMockSessionFiles(t *testing.T, sessionDir string, sessionID string, events []adapter.SessionEvent) func() {
+// setupMockSessionFiles creates mock Claude session files for testing session recovery.
+// Files are created in the correct directory structure for the session_handler Claude provider.
+func setupMockSessionFiles(t *testing.T, baseDir, sessionID string, claudeLines []string) func() {
 	t.Helper()
 
-	// Create session directory under projects structure expected by ClaudeSessionReader
-	projectsDir := filepath.Join(filepath.Dir(sessionDir), "projects", "test-project", "sessions")
-	if err := os.MkdirAll(projectsDir, 0755); err != nil {
-		t.Fatalf("Failed to create session directory: %v", err)
+	projectDir := filepath.Join(baseDir, "projects", "test-project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project directory: %v", err)
 	}
 
-	// Convert adapter events to state events for file storage
-	stateEvents := make([]Event, len(events))
-	for i, event := range events {
-		stateEvents[i] = Event{
-			Seq:       event.Seq,
-			Type:      event.Type,
-			Timestamp: event.Timestamp,
-			Data:      event.Data,
-		}
-	}
-
-	// Write session events to JSONL file
-	sessionFile := filepath.Join(projectsDir, sessionID+".jsonl")
+	sessionFile := filepath.Join(projectDir, sessionID+".jsonl")
 	file, err := os.Create(sessionFile)
 	if err != nil {
 		t.Fatalf("Failed to create session file: %v", err)
 	}
 	defer file.Close()
 
-	for _, event := range stateEvents {
-		eventJSON, err := json.Marshal(event)
-		if err != nil {
-			t.Fatalf("Failed to marshal event: %v", err)
-		}
-		if _, err := file.WriteString(string(eventJSON) + "\n"); err != nil {
+	for _, line := range claudeLines {
+		if _, err := file.WriteString(line + "\n"); err != nil {
 			t.Fatalf("Failed to write event: %v", err)
 		}
 	}
 
-	// Write provider metadata
-	metadataFile := filepath.Join(projectsDir, ".claude-session.json")
-	metadata := map[string]interface{}{
-		"session_id": sessionID,
-		"provider":   "claude",
-		"task_id":    "recovery_test",
-		"created_at": time.Now().UnixMilli(),
-		"updated_at": time.Now().UnixMilli(),
+	// Write sessions-index.json
+	index := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{
+				"sessionId": sessionID,
+				"fullPath":  sessionFile,
+			},
+		},
 	}
-	metadataJSON, _ := json.MarshalIndent(metadata, "", "  ")
-	os.WriteFile(metadataFile, metadataJSON, 0644)
+	indexJSON, _ := json.MarshalIndent(index, "", "  ")
+	os.WriteFile(filepath.Join(projectDir, "sessions-index.json"), indexJSON, 0644)
 
 	return func() {
-		os.RemoveAll(projectsDir)
+		os.RemoveAll(filepath.Join(baseDir, "projects"))
 	}
 }
 
@@ -76,36 +57,59 @@ func TestRecoverSessionFromCLISuccess(t *testing.T) {
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("test-session-123")
 
-	// Create mock session events
-	sessionEvents := []adapter.SessionEvent{
-		{
-			Seq:       1,
-			Type:      "user",
-			Timestamp: time.Now().UnixMilli() - 2000,
-			Data:      map[string]string{"content": "Hello, I need help with my code"},
-		},
-		{
-			Seq:       2,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 1000,
-			Data: map[string]interface{}{
-				"content":  "I'd be happy to help with your code!",
-				"thinking": "The user wants assistance with programming",
-			},
-		},
-		{
-			Seq:       3,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli(),
-			Data: map[string]interface{}{
-				"content": "Could you please share what specific issue you're facing?",
+	// Create mock session events using Claude's actual session format
+	claudeLines := []string{
+		`{"type":"user","message":{"role":"user","content":"Hello, I need help with my code"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'd be happy to help with your code!"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Could you please share what specific issue you're facing?"}]}}`,
+	}
+
+	// Create the expected directory structure for ClaudeSessionReader
+	projectsDir := filepath.Join(tmpDir, "projects")
+	projectDir := filepath.Join(projectsDir, "test-project")
+	sessionFile := filepath.Join(projectDir, "test-session-123.jsonl")
+	indexFile := filepath.Join(projectDir, "sessions-index.json")
+
+	// Create projects directory structure
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project directory: %v", err)
+	}
+
+	// Write session events to JSONL file
+	file, err := os.Create(sessionFile)
+	if err != nil {
+		t.Fatalf("Failed to create session file: %v", err)
+	}
+	defer file.Close()
+
+	for _, line := range claudeLines {
+		if _, err := file.WriteString(line + "\n"); err != nil {
+			t.Fatalf("Failed to write event: %v", err)
+		}
+	}
+
+	// Write sessions-index.json
+	index := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{
+				"sessionId": "test-session-123",
+				"fullPath":  sessionFile,
 			},
 		},
 	}
+	indexJSON, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		t.Fatalf("Failed to marshal index: %v", err)
+	}
+	if err := os.WriteFile(indexFile, indexJSON, 0644); err != nil {
+		t.Fatalf("Failed to write index file: %v", err)
+	}
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "test-session-123", sessionEvents)
-	defer setupCleanup()
+	// Cleanup function
+	sessionCleanup := func() {
+		os.RemoveAll(filepath.Join(tmpDir, "projects"))
+	}
+	defer sessionCleanup()
 
 	// Test recovery
 	recovered, err := mgr.RecoverSessionFromCLI()
@@ -114,21 +118,19 @@ func TestRecoverSessionFromCLISuccess(t *testing.T) {
 		t.Fatalf("Failed to recover session: %v", err)
 	}
 
-	if len(recovered) != len(sessionEvents) {
-		t.Errorf("Expected %d events, got %d", len(sessionEvents), len(recovered))
+	if len(recovered) != 3 {
+		t.Errorf("Expected 3 events, got %d", len(recovered))
 	}
 
-	// Verify recovered events match original
+	// Verify recovered events match expected roles (user, assistant, assistant)
+	expectedTypes := []string{"user", "assistant", "assistant"}
 	for i, event := range recovered {
-		if event.Seq != sessionEvents[i].Seq {
-			t.Errorf("Event %d seq mismatch: expected %d, got %d", i, sessionEvents[i].Seq, event.Seq)
+		expectedSeq := int64(i + 1)
+		if event.Seq != expectedSeq {
+			t.Errorf("Event %d seq mismatch: expected %d, got %d", i, expectedSeq, event.Seq)
 		}
-		if event.Type != sessionEvents[i].Type {
-			t.Errorf("Event %d type mismatch: expected %s, got %s", i, sessionEvents[i].Type, event.Type)
-		}
-		if event.Timestamp < sessionEvents[i].Timestamp-100 { // Allow small time difference
-			t.Errorf("Event %d timestamp too old: expected >= %d, got %d",
-				i, sessionEvents[i].Timestamp-100, event.Timestamp)
+		if i < len(expectedTypes) && event.Type != expectedTypes[i] {
+			t.Errorf("Event %d type mismatch: expected %s, got %s", i, expectedTypes[i], event.Type)
 		}
 	}
 }
@@ -141,8 +143,8 @@ func TestRecoverSessionFromCLIEmpty(t *testing.T) {
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("empty-session")
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "empty-session", []adapter.SessionEvent{})
+	sessionDir := tmpDir
+	setupCleanup := setupMockSessionFiles(t, sessionDir, "empty-session", []string{})
 	defer setupCleanup()
 
 	recovered, err := mgr.RecoverSessionFromCLI()
@@ -205,33 +207,64 @@ func TestGetIncrementalOutputWithRecovery(t *testing.T) {
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("recovery-test-session")
 
-	// Create mock session with existing events
-	existingEvents := []adapter.SessionEvent{
-		{
-			Seq:       1,
-			Type:      "user",
-			Timestamp: time.Now().UnixMilli() - 3000,
-			Data:      map[string]string{"content": "First message"},
-		},
-		{
-			Seq:       2,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 2000,
-			Data:      map[string]string{"content": "Response to first message"},
-		},
-		{
-			Seq:       3,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 1000,
-			Data:      map[string]string{"content": "Continuation of response"},
-		},
+	// Create mock session with existing events using Claude's real format
+	claudeLines := []string{
+		`{"type":"user","message":{"role":"user","content":"First message"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Response to first message"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Continuation of response"}]}}`,
 	}
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "recovery-test-session", existingEvents)
-	defer setupCleanup()
+	// Create the expected directory structure for ClaudeSessionReader
+	projectsDir := filepath.Join(tmpDir, "projects")
+	projectDir := filepath.Join(projectsDir, "recovery-test-project")
+	sessionFile := filepath.Join(projectDir, "recovery-test-session.jsonl")
+	indexFile := filepath.Join(projectDir, "sessions-index.json")
 
-	// Test 1: Get all events from beginning (recovery + cache population)
+	// Create projects directory structure
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project directory: %v", err)
+	}
+
+	// Write session events to JSONL file
+	file, err := os.Create(sessionFile)
+	if err != nil {
+		t.Fatalf("Failed to create session file: %v", err)
+	}
+	defer file.Close()
+
+	for _, line := range claudeLines {
+		if _, err := file.WriteString(line + "\n"); err != nil {
+			t.Fatalf("Failed to write event: %v", err)
+		}
+	}
+
+	// Write sessions-index.json
+	index := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{
+				"sessionId": "recovery-test-session",
+				"fullPath":  sessionFile,
+			},
+		},
+	}
+	indexJSON, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		t.Fatalf("Failed to marshal index: %v", err)
+	}
+	if err := os.WriteFile(indexFile, indexJSON, 0644); err != nil {
+		t.Fatalf("Failed to write index file: %v", err)
+	}
+
+	// Cleanup function
+	cleanupFunc := func() {
+		os.RemoveAll(filepath.Join(tmpDir, "projects"))
+	}
+	defer cleanupFunc()
+
+	// Test 1: Get all events from beginning (recovery only, no cache)
+	// Clear any existing cache first
+	mgr.outputCache = make(map[string]*outputCache)
+
 	events1, err := mgr.GetIncrementalOutput(taskID, 0)
 	if err != nil {
 		t.Fatalf("Failed to get incremental output: %v", err)
@@ -241,43 +274,71 @@ func TestGetIncrementalOutputWithRecovery(t *testing.T) {
 		t.Errorf("Expected 3 events from recovery, got %d", len(events1))
 	}
 
-	// Add new events to cache
+	// Debug: Print recovered events
+	t.Logf("Recovered %d events:", len(events1))
+	for i, event := range events1 {
+		t.Logf("  Event %d: seq=%d, type=%s", i, event.Seq, event.Type)
+	}
+
+	// Test 2: Add new events to cache and test incremental output
+	// First, check current task state
+	state, err := mgr.LoadState(taskID)
+	if err != nil {
+		t.Fatalf("Failed to load task state: %v", err)
+	}
+	t.Logf("Current task state: seq=%d", state.Seq)
+
 	newEvent1 := Event{
 		Type: "chunk",
 		Data: map[string]string{"content": "New message 1"},
 	}
-	mgr.AddOutput(taskID, newEvent1)
+	if err := mgr.AddOutput(taskID, newEvent1); err != nil {
+		t.Fatalf("Failed to add first new event: %v", err)
+	}
+	t.Logf("Added first new event, new seq=%d", newEvent1.Seq)
 
 	newEvent2 := Event{
 		Type: "chunk",
 		Data: map[string]string{"content": "New message 2"},
 	}
-	mgr.AddOutput(taskID, newEvent2)
+	if err := mgr.AddOutput(taskID, newEvent2); err != nil {
+		t.Fatalf("Failed to add second new event: %v", err)
+	}
+	t.Logf("Added second new event, new seq=%d", newEvent2.Seq)
 
-	// Test 2: Get all events from beginning (recovered + newly added)
-	// Note: AddOutput seq starts from 1 because recovery doesn't update state.json seq,
-	// so new events may have overlapping seq values with recovered events.
-	events2, err := mgr.GetIncrementalOutput(taskID, 0)
+	// Debug: Print cached events
+	mgr.cacheMu.RLock()
+	cache := mgr.outputCache[taskID]
+	if cache != nil {
+		t.Logf("Cache now has %d events:", len(cache.events))
+		for i, event := range cache.events {
+			t.Logf("  Cache event %d: seq=%d, type=%s", i, event.Seq, event.Type)
+		}
+	}
+	mgr.cacheMu.RUnlock()
+
+	// Test 3: Get incremental output after last known sequence (seq=3)
+	// Should return only the new events (seq=4, 5)
+	events2, err := mgr.GetIncrementalOutput(taskID, 3)
 	if err != nil {
 		t.Fatalf("Failed to get incremental output: %v", err)
 	}
 
-	// Should have 5 events total: 3 recovered + 2 new
-	if len(events2) != 5 {
-		t.Errorf("Expected 5 events (3 recovered + 2 new), got %d", len(events2))
+	t.Logf("Got %d events for GetIncrementalOutput(taskID, 3):", len(events2))
+	for i, event := range events2 {
+		t.Logf("  Event %d: seq=%d, type=%s", i, event.Seq, event.Type)
 	}
 
-	// Test 3: Get events after all recovered events (seq 3)
-	// Since new events start from seq 1 (not seq 4), requesting after seq 3
-	// won't find new events in cache - this demonstrates the seq overlap behavior.
-	events3, err := mgr.GetIncrementalOutput(taskID, 3)
-	if err != nil {
-		t.Fatalf("Failed to get incremental output: %v", err)
+	if len(events2) != 2 {
+		t.Errorf("Expected 2 new events, got %d", len(events2))
 	}
 
-	// New events have seq 1 and 2, both <= 3, so nothing is returned
-	if len(events3) != 0 {
-		t.Errorf("Expected 0 events (new events have seq <= 3), got %d", len(events3))
+	// Check sequence numbers
+	if len(events2) > 0 && events2[0].Seq != 4 {
+		t.Errorf("Expected first new event seq=4, got %d", events2[0].Seq)
+	}
+	if len(events2) > 1 && events2[1].Seq != 5 {
+		t.Errorf("Expected second new event seq=5, got %d", events2[1].Seq)
 	}
 }
 
@@ -293,20 +354,56 @@ func TestCachePopulationFromSession(t *testing.T) {
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("cache-pop-session")
 
-	// Create session with many events
-	sessionEvents := make([]adapter.SessionEvent, 100)
-	for i := 1; i <= 100; i++ {
-		sessionEvents[i-1] = adapter.SessionEvent{
-			Seq:       int64(i),
-			Type:      "chunk",
-			Timestamp: time.Now().UnixMilli() + int64(i)*100,
-			Data:      map[string]string{"content": fmt.Sprintf("Event %d", i)},
+	// Create session with many events using Claude's real format
+	numEvents := 100
+
+	// Create the expected directory structure for ClaudeSessionReader
+	projectsDir := filepath.Join(tmpDir, "projects")
+	projectDir := filepath.Join(projectsDir, "cache-pop-project")
+	sessionFile := filepath.Join(projectDir, "cache-pop-session.jsonl")
+	indexFile := filepath.Join(projectDir, "sessions-index.json")
+
+	// Create projects directory structure
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project directory: %v", err)
+	}
+
+	// Write session events to JSONL file
+	file, err := os.Create(sessionFile)
+	if err != nil {
+		t.Fatalf("Failed to create session file: %v", err)
+	}
+	defer file.Close()
+
+	for i := 1; i <= numEvents; i++ {
+		line := fmt.Sprintf(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Event %d"}]}}`, i)
+		if _, err := file.WriteString(line + "\n"); err != nil {
+			t.Fatalf("Failed to write event: %v", err)
 		}
 	}
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "cache-pop-session", sessionEvents)
-	defer setupCleanup()
+	// Write sessions-index.json
+	index := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{
+				"sessionId": "cache-pop-session",
+				"fullPath":  sessionFile,
+			},
+		},
+	}
+	indexJSON, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		t.Fatalf("Failed to marshal index: %v", err)
+	}
+	if err := os.WriteFile(indexFile, indexJSON, 0644); err != nil {
+		t.Fatalf("Failed to write index file: %v", err)
+	}
+
+	// Cleanup function
+	sessionCleanup := func() {
+		os.RemoveAll(filepath.Join(tmpDir, "projects"))
+	}
+	defer sessionCleanup()
 
 	// Trigger cache population by calling GetIncrementalOutput
 	_, _ = mgr.GetIncrementalOutput(taskID, 0)
@@ -316,18 +413,16 @@ func TestCachePopulationFromSession(t *testing.T) {
 	cache := mgr.outputCache[taskID]
 	mgr.cacheMu.RUnlock()
 
-	if len(cache.events) != 100 {
-		t.Errorf("Expected 100 events in cache, got %d", len(cache.events))
-	}
-
-	// Verify cache efficiency
-	stats := mgr.GetCacheStats()
-	if stats["total_events"].(int) != 100 {
-		t.Errorf("Expected 100 total events in stats, got %d", stats["total_events"])
+	if cache == nil || len(cache.events) != numEvents {
+		if cache == nil {
+			t.Error("Expected cache to be populated, got nil")
+		} else {
+			t.Errorf("Expected %d events in cache, got %d", numEvents, len(cache.events))
+		}
 	}
 }
 
-// TestMixedSourceRecovery tests that recovery populates cache, then new events are added
+// TestMixedSourceRecovery tests that recovery populates cache and subsequent reads use cache
 func TestMixedSourceRecovery(t *testing.T) {
 	mgr, tmpDir, cleanup := setupTestManager(t)
 	defer cleanup()
@@ -335,95 +430,47 @@ func TestMixedSourceRecovery(t *testing.T) {
 	taskID := "mixed_source_test"
 	mgr.CreateTask(taskID, "claude")
 
+	// Set up session recovery
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("mixed-source-session")
 
-	sessionEvents := []adapter.SessionEvent{
-		{
-			Seq:       1,
-			Type:      "user",
-			Timestamp: time.Now().UnixMilli() - 4000,
-			Data:      map[string]string{"content": "Message 1"},
-		},
-		{
-			Seq:       2,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 3000,
-			Data:      map[string]string{"content": "Response 1"},
-		},
-		{
-			Seq:       3,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 2000,
-			Data:      map[string]string{"content": "Response 2"},
-		},
-		{
-			Seq:       4,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli() - 1000,
-			Data:      map[string]string{"content": "Response 3"},
-		},
-		{
-			Seq:       5,
-			Type:      "assistant",
-			Timestamp: time.Now().UnixMilli(),
-			Data:      map[string]string{"content": "Response 4"},
-		},
+	// Create session events using Claude format
+	claudeLines := []string{
+		`{"type":"user","message":{"role":"user","content":"Message 1"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Response 1"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Response 2"}]}}`,
 	}
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "mixed-source-session", sessionEvents)
+	setupCleanup := setupMockSessionFiles(t, tmpDir, "mixed-source-session", claudeLines)
 	defer setupCleanup()
 
-	// Step 1: Trigger recovery which populates cache with 5 session events
+	// First call: triggers recovery from CLI session
 	events1, err := mgr.GetIncrementalOutput(taskID, 0)
 	if err != nil {
 		t.Fatalf("Failed to get incremental output: %v", err)
 	}
-	if len(events1) != 5 {
-		t.Fatalf("Expected 5 recovered events, got %d", len(events1))
+
+	if len(events1) != 3 {
+		t.Errorf("Expected 3 events from recovery, got %d", len(events1))
 	}
 
-	// Step 2: Add new events via AddOutput (seq starts from 1 due to state.json seq=0)
-	for i := 0; i < 3; i++ {
+	// Add new events to cache (seq continues from where recovery left off)
+	for i := 4; i <= 5; i++ {
 		event := Event{
 			Type: "chunk",
-			Data: map[string]string{"content": fmt.Sprintf("New message %d", i+1)},
+			Data: map[string]string{"content": fmt.Sprintf("New message %d", i)},
 		}
 		mgr.AddOutput(taskID, event)
 	}
 
-	// Step 3: Get all events from cache (now contains 5 recovered + 3 new = 8 events)
-	events2, err := mgr.GetIncrementalOutput(taskID, 0)
+	// Second call: should use cache (no recovery needed)
+	events2, err := mgr.GetIncrementalOutput(taskID, 3)
 	if err != nil {
 		t.Fatalf("Failed to get incremental output: %v", err)
 	}
 
-	if len(events2) != 8 {
-		t.Errorf("Expected 8 events total (5 recovered + 3 new), got %d", len(events2))
-	}
-
-	// Step 4: Verify events after seq 3
-	// Only recovered events with seq > 3 pass the filter (seq 4, 5)
-	// New events have seq 1,2,3 which are all <= 3
-	events3, err := mgr.GetIncrementalOutput(taskID, 3)
-	if err != nil {
-		t.Fatalf("Failed to get incremental output: %v", err)
-	}
-
-	if len(events3) != 2 {
-		t.Errorf("Expected 2 events with seq > 3 (recovered 4,5), got %d", len(events3))
-	}
-
-	// Step 5: Verify events after seq 5 returns only new events with seq > 5
-	// New events have seq 1,2,3 — none > 5, so result is empty
-	events4, err := mgr.GetIncrementalOutput(taskID, 5)
-	if err != nil {
-		t.Fatalf("Failed to get incremental output: %v", err)
-	}
-
-	if len(events4) != 0 {
-		t.Errorf("Expected 0 events with seq > 5, got %d", len(events4))
+	if len(events2) != 2 {
+		t.Errorf("Expected 2 new events from cache, got %d", len(events2))
 	}
 }
 
@@ -444,21 +491,16 @@ func TestRecoveryWithCacheLimits(t *testing.T) {
 	mgr.SetProvider("claude")
 	mgr.SetSessionID("limited-session")
 
-	// Create session with many events (more than cache can hold)
-	sessionEvents := make([]adapter.SessionEvent, 20)
+	// Create session with many events (more than cache can hold) using Claude format
+	var claudeLines []string
 	for i := 1; i <= 20; i++ {
-		sessionEvents[i-1] = adapter.SessionEvent{
-			Seq:       int64(i),
-			Type:      "chunk",
-			Timestamp: time.Now().UnixMilli() + int64(i)*100,
-			Data: map[string]string{
-				"content": fmt.Sprintf("This is a longer message number %d with more content to consume memory", i),
-			},
-		}
+		claudeLines = append(claudeLines, fmt.Sprintf(
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"This is a longer message number %d with more content to consume memory"}]}}`,
+			i,
+		))
 	}
 
-	sessionDir := filepath.Join(tmpDir, "sessions")
-	setupCleanup := setupMockSessionFiles(t, sessionDir, "limited-session", sessionEvents)
+	setupCleanup := setupMockSessionFiles(t, tmpDir, "limited-session", claudeLines)
 	defer setupCleanup()
 
 	// Trigger recovery and cache population

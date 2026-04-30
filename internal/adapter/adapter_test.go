@@ -42,19 +42,23 @@ func TestClaudeAdapterBuildCommand(t *testing.T) {
 		t.Errorf("Expected command ending with 'claude', got %s", cmd.Path)
 	}
 
-	// Verify parameters include -p and --output-format stream-json
+	// Verify parameters include --output-format stream-json and --input-format stream-json
 	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, "-p") {
-		t.Error("Expected -p flag")
-	}
 	if !strings.Contains(args, "--output-format") {
 		t.Error("Expected --output-format flag")
+	}
+	if !strings.Contains(args, "--input-format") {
+		t.Error("Expected --input-format flag")
 	}
 	if !strings.Contains(args, "stream-json") {
 		t.Error("Expected stream-json format")
 	}
 	if !strings.Contains(args, "--verbose") {
 		t.Error("Expected --verbose flag")
+	}
+	// Should NOT have -p (persistent mode, not print mode)
+	if strings.Contains(args, " -p") {
+		t.Error("Should not have -p flag in persistent mode")
 	}
 }
 
